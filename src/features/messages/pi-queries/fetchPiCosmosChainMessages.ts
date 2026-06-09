@@ -217,6 +217,35 @@ async function searchByMsgId(
   chainMetadata: ChainMetadata<{ mailbox?: string }>,
 ): Promise<Message[]> {
   const normalizedId = searchMsgId.replace(/^0x/, '').toLowerCase();
+
+  // Try LCD first (CORS-friendly): search recent txs and look for msgId in events
+  const lcdUrl = chainMetadata.restUrls?.[0]?.http;
+  if (lcdUrl) {
+    try {
+      const event = encodeURIComponent(`execute._contract_address='${mailboxBech32}'`);
+      const url = `${lcdUrl}/cosmos/tx/v1beta1/txs?events=${event}&limit=50&order_by=ORDER_BY_DESC`;
+      const res = await fetch(url);
+      if (res.ok) {
+        const data = await res.json();
+        for (const tx of data?.tx_responses || []) {
+          const allEvents: CosmosEvent[] = [];
+          for (const log of tx.logs || []) allEvents.push(...(log.events || []));
+          const idEv = allEvents.find((e) => e.type === 'wasm-mailbox_dispatch_id');
+          if (!idEv) continue;
+          const mid = (attrsToMap(idEv.attributes)['message_id'] || '').replace(/^0x/, '').toLowerCase();
+          if (mid === normalizedId) {
+            const timestamp = tx.timestamp ? new Date(tx.timestamp).getTime() : undefined;
+            const msg = eventsToMessage(allEvents, tx.txhash, tx.height, timestamp, chainMetadata, multiProvider);
+            if (msg) return [msg];
+          }
+        }
+      }
+    } catch (e) {
+      logger.debug('Cosmos LCD msgId search failed', e);
+    }
+  }
+
+  // Fallback: RPC tx_search
   try {
     const res = await fetch(rpcUrl, {
       method: 'POST',
@@ -255,17 +284,62 @@ async function searchByMsgId(
       }
     }
   } catch (e) {
-    logger.debug('Cosmos msgId search failed', e);
+    logger.debug('Cosmos RPC msgId search failed', e);
   }
   return [];
 }
 
+// LCD-based tx search — avoids browser CORS restrictions that affect RPC tx_search.
+// Uses the Cosmos REST API: GET /cosmos/tx/v1beta1/txs?events=...
+async function searchRecentViaLcd(
+  lcdUrl: string,
+  mailboxBech32: string,
+  multiProvider: MultiProtocolProvider,
+  chainMetadata: ChainMetadata<{ mailbox?: string }>,
+): Promise<Message[]> {
+  try {
+    const event = encodeURIComponent(`execute._contract_address='${mailboxBech32}'`);
+    const url = `${lcdUrl}/cosmos/tx/v1beta1/txs?events=${event}&limit=${COSMOS_PI_TX_LIMIT}&order_by=ORDER_BY_DESC`;
+    const res = await fetch(url);
+    if (!res.ok) return [];
+    const data = await res.json();
+    const txResponses: Array<{
+      txhash: string;
+      height: string;
+      timestamp: string;
+      logs: Array<{ events: CosmosEvent[] }>;
+    }> = data?.tx_responses || [];
+
+    const messages: Message[] = [];
+    for (const tx of txResponses) {
+      const allEvents: CosmosEvent[] = [];
+      for (const log of tx.logs || []) allEvents.push(...(log.events || []));
+      const timestamp = tx.timestamp ? new Date(tx.timestamp).getTime() : undefined;
+      const msg = eventsToMessage(allEvents, tx.txhash, tx.height, timestamp, chainMetadata, multiProvider);
+      if (msg) messages.push(msg);
+    }
+    return messages;
+  } catch (e) {
+    logger.debug('Cosmos LCD recent search failed', e);
+    return [];
+  }
+}
+
+// Also search via RPC as fallback (works server-side / CLI, may be blocked in browser by CORS)
 async function searchRecent(
   rpcUrl: string,
   mailboxBech32: string,
   multiProvider: MultiProtocolProvider,
   chainMetadata: ChainMetadata<{ mailbox?: string }>,
 ): Promise<Message[]> {
+  // Prefer LCD to avoid CORS issues in browser context
+  const lcdUrl = chainMetadata.restUrls?.[0]?.http;
+  if (lcdUrl) {
+    const lcdResults = await searchRecentViaLcd(lcdUrl, mailboxBech32, multiProvider, chainMetadata);
+    if (lcdResults.length) return lcdResults;
+  }
+
+  // Fallback to RPC tx_search (works server-side)
   try {
     const res = await fetch(rpcUrl, {
       method: 'POST',
@@ -284,27 +358,15 @@ async function searchRecent(
     });
     const data = await res.json();
     const txs: CosmosTxSearchResult[] = data?.result?.txs || [];
-
-    // Fetch all block timestamps in parallel instead of sequentially
     const timestamps = await Promise.all(txs.map((tx) => fetchBlockTimestamp(rpcUrl, tx.height)));
-
     const messages: Message[] = [];
     for (let i = 0; i < txs.length; i++) {
-      const tx = txs[i];
-      const timestamp = timestamps[i];
-      const msg = eventsToMessage(
-        tx.tx_result.events,
-        tx.hash,
-        tx.height,
-        timestamp,
-        chainMetadata,
-        multiProvider,
-      );
+      const msg = eventsToMessage(txs[i].tx_result.events, txs[i].hash, txs[i].height, timestamps[i], chainMetadata, multiProvider);
       if (msg) messages.push(msg);
     }
     return messages;
   } catch (e) {
-    logger.debug('Cosmos recent search failed', e);
+    logger.debug('Cosmos RPC recent search failed', e);
     return [];
   }
 }
