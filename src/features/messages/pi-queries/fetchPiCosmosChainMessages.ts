@@ -57,6 +57,13 @@ async function fetchBlockTimestamp(rpcUrl: string, height: string): Promise<numb
   return undefined;
 }
 
+// Legacy mailboxes: old deployments still active on-chain.
+// These are searched in addition to the current mailbox from the registry.
+const LEGACY_MAILBOXES: Record<string, string[]> = {
+  // terraclassic mainnet: v1 (domain 1325, deployed 2026-06-03) still has active messages
+  terraclassic: ['terra1qeutmjcnwmhmumv4xlzrqmva0m4usdw6lt7mayk7wfw7gftsv6wq2xnxh5'],
+};
+
 async function resolveMailboxBech32(
   chainMetadata: ChainMetadata<{ mailbox?: string }>,
   registry: IRegistry,
@@ -71,6 +78,16 @@ async function resolveMailboxBech32(
     logger.debug('Failed to convert mailbox bytes32 to bech32', e);
     return undefined;
   }
+}
+
+function resolveAllMailboxes(
+  chainName: string,
+  currentMailbox: string | undefined,
+): string[] {
+  const legacy = LEGACY_MAILBOXES[chainName] || [];
+  const all = [...legacy];
+  if (currentMailbox && !all.includes(currentMailbox)) all.unshift(currentMailbox);
+  return all;
 }
 
 function eventsToMessage(
@@ -303,22 +320,43 @@ export async function fetchMessagesFromPiCosmosChain(
   const rpcUrl = chainMetadata.rpcUrls?.[0]?.http;
   if (!rpcUrl) return [];
 
-  const mailboxBech32 = await resolveMailboxBech32(chainMetadata, registry);
-  if (!mailboxBech32) {
+  const currentMailbox = await resolveMailboxBech32(chainMetadata, registry);
+  const allMailboxes = resolveAllMailboxes(chainMetadata.name, currentMailbox);
+
+  if (!allMailboxes.length) {
     logger.debug('No mailbox found for Cosmos chain', chainMetadata.name);
     return [];
   }
 
   const input = query.input.replace(/^0x/, '');
-  logger.debug(`Cosmos PI query on ${chainMetadata.name}: "${input.slice(0, 16)}..."`);
+  logger.debug(`Cosmos PI query on ${chainMetadata.name}: "${input.slice(0, 16)}..." (${allMailboxes.length} mailboxes)`);
 
-  // 64-char hex = tx hash or msg id
+  // 64-char hex = tx hash or msg id — search across all mailboxes
   if (/^[0-9a-fA-F]{64}$/.test(input)) {
+    // Try tx hash first (doesn't depend on mailbox)
     const byTxHash = await searchByTxHash(rpcUrl, input, multiProvider, chainMetadata);
     if (byTxHash.length) return byTxHash;
-    return searchByMsgId(rpcUrl, mailboxBech32, input, multiProvider, chainMetadata);
+    // Try each mailbox for msgId search
+    for (const mailbox of allMailboxes) {
+      const found = await searchByMsgId(rpcUrl, mailbox, input, multiProvider, chainMetadata);
+      if (found.length) return found;
+    }
+    return [];
   }
 
-  // Address or anything else → return recent dispatches
-  return searchRecent(rpcUrl, mailboxBech32, multiProvider, chainMetadata);
+  // Recent dispatches — aggregate across all mailboxes and sort by block height
+  const allMessages: Message[] = [];
+  for (const mailbox of allMailboxes) {
+    const msgs = await searchRecent(rpcUrl, mailbox, multiProvider, chainMetadata);
+    allMessages.push(...msgs);
+  }
+  // Sort by block number descending and deduplicate by msgId
+  const seen = new Set<string>();
+  return allMessages
+    .sort((a, b) => (b.origin?.blockNumber ?? 0) - (a.origin?.blockNumber ?? 0))
+    .filter((m) => {
+      if (seen.has(m.msgId)) return false;
+      seen.add(m.msgId);
+      return true;
+    });
 }
