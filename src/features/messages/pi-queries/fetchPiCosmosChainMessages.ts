@@ -17,6 +17,21 @@ import { logger } from '../../../utils/logger';
 
 const COSMOS_PI_TX_LIMIT = 20;
 
+// Use a server-side proxy for Terra Classic RPC calls to bypass browser CORS restrictions.
+// The proxy route at /api/terra-cosmos-rpc forwards requests server-side.
+const TC_RPC_PROXY = '/api/terra-cosmos-rpc';
+
+// Helper: call RPC via the server-side proxy (avoids CORS)
+async function rpcViaProxy(method: string, params: Record<string, unknown>): Promise<unknown> {
+  const res = await fetch(TC_RPC_PROXY, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
+  });
+  if (!res.ok) throw new Error(`proxy error ${res.status}`);
+  return res.json();
+}
+
 // CometBFT event attribute - keys/values are plain strings (not base64) in Terra Classic
 interface CosmosAttr {
   key: string;
@@ -41,15 +56,11 @@ function attrsToMap(attrs: CosmosAttr[]): Record<string, string> {
   return out;
 }
 
-async function fetchBlockTimestamp(rpcUrl: string, height: string): Promise<number | undefined> {
+async function fetchBlockTimestamp(_rpcUrl: string, height: string): Promise<number | undefined> {
   try {
-    const res = await fetch(rpcUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'block', params: { height } }),
-    });
-    const data = await res.json();
-    const timeStr: string | undefined = data?.result?.block?.header?.time;
+    // Use proxy to avoid CORS
+    const data = await rpcViaProxy('block', { height }) as { result?: { block?: { header?: { time?: string } } } };
+    const timeStr = data?.result?.block?.header?.time;
     if (timeStr) return new Date(timeStr).getTime();
   } catch (e) {
     logger.debug('Failed to fetch block timestamp for height', height, e);
@@ -245,24 +256,14 @@ async function searchByMsgId(
     }
   }
 
-  // Fallback: RPC tx_search
+  // Fallback: RPC tx_search via server-side proxy (no CORS issue)
   try {
-    const res = await fetch(rpcUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        jsonrpc: '2.0',
-        id: 1,
-        method: 'tx_search',
-        params: {
-          query: `execute._contract_address='${mailboxBech32}'`,
-          order_by: 'desc',
-          per_page: String(COSMOS_PI_TX_LIMIT),
-          page: '1',
-        },
-      }),
-    });
-    const data = await res.json();
+    const data = await rpcViaProxy('tx_search', {
+      query: `execute._contract_address='${mailboxBech32}'`,
+      order_by: 'desc',
+      per_page: String(COSMOS_PI_TX_LIMIT),
+      page: '1',
+    }) as { result?: { txs?: CosmosTxSearchResult[] } };
     const txs: CosmosTxSearchResult[] = data?.result?.txs || [];
 
     for (const tx of txs) {
@@ -339,24 +340,14 @@ async function searchRecent(
     if (lcdResults.length) return lcdResults;
   }
 
-  // Fallback to RPC tx_search (works server-side)
+  // Fallback: RPC tx_search via server-side proxy (no CORS issue)
   try {
-    const res = await fetch(rpcUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        jsonrpc: '2.0',
-        id: 1,
-        method: 'tx_search',
-        params: {
-          query: `execute._contract_address='${mailboxBech32}'`,
-          order_by: 'desc',
-          per_page: String(COSMOS_PI_TX_LIMIT),
-          page: '1',
-        },
-      }),
-    });
-    const data = await res.json();
+    const data = await rpcViaProxy('tx_search', {
+      query: `execute._contract_address='${mailboxBech32}'`,
+      order_by: 'desc',
+      per_page: String(COSMOS_PI_TX_LIMIT),
+      page: '1',
+    }) as { result?: { txs?: CosmosTxSearchResult[] } };
     const txs: CosmosTxSearchResult[] = data?.result?.txs || [];
     const timestamps = await Promise.all(txs.map((tx) => fetchBlockTimestamp(rpcUrl, tx.height)));
     const messages: Message[] = [];
