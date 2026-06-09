@@ -21,12 +21,18 @@ const COSMOS_PI_TX_LIMIT = 20;
 // The proxy route at /api/terra-cosmos-rpc forwards requests server-side.
 const TC_RPC_PROXY = '/api/terra-cosmos-rpc';
 
-// Helper: call RPC via the server-side proxy (avoids CORS)
-async function rpcViaProxy(method: string, params: Record<string, unknown>): Promise<unknown> {
+// Helper: call RPC via the server-side proxy (avoids CORS). The proxy resolves the
+// RPC node list from the registry by chain name, so endpoints stay registry-driven
+// and mainnet/testnet queries hit the correct nodes without any hardcoding here.
+async function rpcViaProxy(
+  method: string,
+  params: Record<string, unknown>,
+  chainName: string,
+): Promise<unknown> {
   const res = await fetch(TC_RPC_PROXY, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params, chainName }),
   });
   if (!res.ok) throw new Error(`proxy error ${res.status}`);
   return res.json();
@@ -56,10 +62,10 @@ function attrsToMap(attrs: CosmosAttr[]): Record<string, string> {
   return out;
 }
 
-async function fetchBlockTimestamp(_rpcUrl: string, height: string): Promise<number | undefined> {
+async function fetchBlockTimestamp(chainName: string, height: string): Promise<number | undefined> {
   try {
     // Use proxy to avoid CORS
-    const data = await rpcViaProxy('block', { height }) as { result?: { block?: { header?: { time?: string } } } };
+    const data = await rpcViaProxy('block', { height }, chainName) as { result?: { block?: { header?: { time?: string } } } };
     const timeStr = data?.result?.block?.header?.time;
     if (timeStr) return new Date(timeStr).getTime();
   } catch (e) {
@@ -72,6 +78,8 @@ async function fetchBlockTimestamp(_rpcUrl: string, height: string): Promise<num
 // These are searched in addition to the current mailbox from the registry.
 const LEGACY_MAILBOXES: Record<string, string[]> = {
   // terraclassic mainnet: v1 (domain 1325, deployed 2026-06-03) still has active messages
+  // from before the redeploy to domain 132556. Not representable in the registry (one
+  // mailbox per chain), so kept here. All other mailboxes come from the registry.
   terraclassic: ['terra1qeutmjcnwmhmumv4xlzrqmva0m4usdw6lt7mayk7wfw7gftsv6wq2xnxh5'],
 };
 
@@ -126,7 +134,15 @@ function eventsToMessage(
     const msgBytes = ensure0x(messageHex);
     const parsed = parseMessage(msgBytes);
     const msgId = messageId(msgBytes);
-    const originChainId = multiProvider.getChainId(parsed.origin);
+    // A dispatch event is always emitted by THIS chain's mailbox, so the origin is
+    // always the chain we queried — even when a legacy mailbox encoded a different
+    // domain (v1 used 1325, current registry uses 132556). Normalize to the registered
+    // chain so the UI resolves name/address/IGP via originDomainId. The raw msgId is
+    // computed from the unmodified message bytes, so search-by-id still matches.
+    // tryGetChainId never throws (unlike getChainId), avoiding silent message drops.
+    const originChainId =
+      chainMetadata.chainId ?? multiProvider.tryGetChainId(parsed.origin) ?? parsed.origin;
+    const originDomainId = chainMetadata.domainId ?? parsed.origin;
     const destinationChainId =
       multiProvider.tryGetChainId(parsed.destination) || parsed.destination;
 
@@ -158,7 +174,7 @@ function eventsToMessage(
       nonce: parsed.nonce,
       originChainId,
       destinationChainId,
-      originDomainId: parsed.origin,
+      originDomainId,
       destinationDomainId: parsed.destination,
       body: parsed.body,
       numPayments: igpPayment ? 1 : 0,
@@ -258,12 +274,13 @@ async function searchByMsgId(
 
   // Fallback: RPC tx_search via server-side proxy (no CORS issue)
   try {
+    const chainName = chainMetadata.name;
     const data = await rpcViaProxy('tx_search', {
       query: `execute._contract_address='${mailboxBech32}'`,
       order_by: 'desc',
       per_page: String(COSMOS_PI_TX_LIMIT),
       page: '1',
-    }) as { result?: { txs?: CosmosTxSearchResult[] } };
+    }, chainName) as { result?: { txs?: CosmosTxSearchResult[] } };
     const txs: CosmosTxSearchResult[] = data?.result?.txs || [];
 
     for (const tx of txs) {
@@ -272,7 +289,7 @@ async function searchByMsgId(
       const attrs = attrsToMap(idEv.attributes);
       const mid = (attrs['message_id'] || '').replace(/^0x/, '').toLowerCase();
       if (mid === normalizedId) {
-        const timestamp = await fetchBlockTimestamp(rpcUrl, tx.height);
+        const timestamp = await fetchBlockTimestamp(chainName, tx.height);
         const msg = eventsToMessage(
           tx.tx_result.events,
           tx.hash,
@@ -342,14 +359,15 @@ async function searchRecent(
 
   // Fallback: RPC tx_search via server-side proxy (no CORS issue)
   try {
+    const chainName = chainMetadata.name;
     const data = await rpcViaProxy('tx_search', {
       query: `execute._contract_address='${mailboxBech32}'`,
       order_by: 'desc',
       per_page: String(COSMOS_PI_TX_LIMIT),
       page: '1',
-    }) as { result?: { txs?: CosmosTxSearchResult[] } };
+    }, chainName) as { result?: { txs?: CosmosTxSearchResult[] } };
     const txs: CosmosTxSearchResult[] = data?.result?.txs || [];
-    const timestamps = await Promise.all(txs.map((tx) => fetchBlockTimestamp(rpcUrl, tx.height)));
+    const timestamps = await Promise.all(txs.map((tx) => fetchBlockTimestamp(chainName, tx.height)));
     const messages: Message[] = [];
     for (let i = 0; i < txs.length; i++) {
       const msg = eventsToMessage(txs[i].tx_result.events, txs[i].hash, txs[i].height, timestamps[i], chainMetadata, multiProvider);

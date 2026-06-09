@@ -1,14 +1,35 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 
-// Server-side proxy for Terra Classic RPC calls.
-// Browser cannot call the RPC directly due to CORS restrictions on Terra Classic nodes.
-// This route forwards tx_search queries to the RPC and returns the results.
+import { createTcRegistry } from '../../tc-overrides/registry';
 
-const TC_RPCS = [
-  'https://terra-classic-rpc.publicnode.com:443',
-  'https://rpc.terra-classic.hexxagon.io',
-  'https://api-lunc-rpc.binodes.com',
-];
+// Server-side proxy for Terra Classic RPC calls.
+// Browsers can't call the Terra Classic RPCs directly (CORS), so the explorer forwards
+// read-only queries (tx_search, block, ...) through this route.
+//
+// RPC endpoints are NOT hardcoded here: they're resolved from the Hyperlane registry by
+// chain name, so mainnet/testnet endpoints stay in one source of truth and queries hit
+// the right network. Resolving server-side (instead of trusting client-supplied URLs)
+// also avoids turning this route into an open SSRF proxy.
+
+// Read-only methods only.
+const ALLOWED_METHODS = ['tx_search', 'tx', 'block', 'block_results'];
+
+// Cache resolved RPC URLs per chain to avoid hitting the registry on every call.
+const RPC_CACHE_TTL_MS = 5 * 60_000;
+const rpcUrlCache = new Map<string, { urls: string[]; at: number }>();
+
+async function resolveRpcUrls(chainName: string): Promise<string[]> {
+  const cached = rpcUrlCache.get(chainName);
+  if (cached && Date.now() - cached.at < RPC_CACHE_TTL_MS) return cached.urls;
+
+  const registry = createTcRegistry();
+  const metadata = await registry.getChainMetadata(chainName);
+  const urls = (metadata?.rpcUrls ?? [])
+    .map((u) => u.http)
+    .filter((u): u is string => !!u && u.startsWith('https://'));
+  rpcUrlCache.set(chainName, { urls, at: Date.now() });
+  return urls;
+}
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -20,19 +41,35 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(400).json({ error: 'Invalid request body' });
   }
 
-  // Only allow tx_search and tx queries for safety
-  const method = body.method;
-  if (!['tx_search', 'tx', 'block', 'block_results'].includes(method)) {
+  if (!ALLOWED_METHODS.includes(body.method)) {
     return res.status(403).json({ error: 'Method not permitted' });
   }
 
-  let lastError: string = 'All RPC endpoints failed';
-  for (const rpcUrl of TC_RPCS) {
+  const chainName = body.chainName;
+  if (typeof chainName !== 'string' || !chainName) {
+    return res.status(400).json({ error: 'Missing chainName' });
+  }
+
+  let rpcUrls: string[];
+  try {
+    rpcUrls = await resolveRpcUrls(chainName);
+  } catch (e: unknown) {
+    return res.status(502).json({ error: `Failed to resolve RPCs: ${errMsg(e)}` });
+  }
+  if (!rpcUrls.length) {
+    return res.status(404).json({ error: `No RPC endpoints for chain ${chainName}` });
+  }
+
+  // Forward only the JSON-RPC envelope (drop our chainName routing hint).
+  const rpcPayload = { jsonrpc: '2.0', id: body.id ?? 1, method: body.method, params: body.params };
+
+  let lastError = 'All RPC endpoints failed';
+  for (const rpcUrl of rpcUrls) {
     try {
       const response = await fetch(rpcUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
+        body: JSON.stringify(rpcPayload),
         signal: AbortSignal.timeout(8000),
       });
       if (!response.ok) continue;
@@ -40,9 +77,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       res.setHeader('Cache-Control', 'no-store');
       return res.status(200).json(data);
     } catch (e: unknown) {
-      lastError = e instanceof Error ? e.message : String(e);
+      lastError = errMsg(e);
     }
   }
 
   return res.status(502).json({ error: lastError });
+}
+
+function errMsg(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
 }
