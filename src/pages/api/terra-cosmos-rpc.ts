@@ -1,20 +1,26 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
+import { parse as parseYaml } from 'yaml';
 
-import { createTcRegistry } from '../../tc-overrides/registry';
+import { TC_REGISTRY_BRANCH, TC_REGISTRY_URL } from '../../tc-overrides/registry';
 
 // Server-side proxy for Terra Classic RPC calls.
 // Browsers can't call the Terra Classic RPCs directly (CORS), so the explorer forwards
 // read-only queries (tx_search, block, ...) through this route.
 //
-// RPC endpoints are NOT hardcoded here: they're resolved from the Hyperlane registry by
-// chain name, so mainnet/testnet endpoints stay in one source of truth and queries hit
-// the right network. Resolving server-side (instead of trusting client-supplied URLs)
-// also avoids turning this route into an open SSRF proxy.
+// RPC endpoints are NOT hardcoded here: they're read from the chain's metadata.yaml in
+// the Hyperlane registry, so mainnet/testnet endpoints live in one source of truth and
+// queries hit the right network. Resolving server-side (rather than trusting client URLs)
+// keeps this route from becoming an open SSRF proxy. Only the single small metadata file
+// is fetched (and cached), so this stays well under the client search timeout.
 
-// Read-only methods only.
 const ALLOWED_METHODS = ['tx_search', 'tx', 'block', 'block_results'];
 
-// Cache resolved RPC URLs per chain to avoid hitting the registry on every call.
+// github.com/<org>/<repo> -> raw.githubusercontent.com/<org>/<repo>/<branch>/chains
+const RAW_CHAINS_BASE = `${TC_REGISTRY_URL.replace(
+  'https://github.com',
+  'https://raw.githubusercontent.com',
+)}/${TC_REGISTRY_BRANCH}/chains`;
+
 const RPC_CACHE_TTL_MS = 5 * 60_000;
 const rpcUrlCache = new Map<string, { urls: string[]; at: number }>();
 
@@ -22,8 +28,11 @@ async function resolveRpcUrls(chainName: string): Promise<string[]> {
   const cached = rpcUrlCache.get(chainName);
   if (cached && Date.now() - cached.at < RPC_CACHE_TTL_MS) return cached.urls;
 
-  const registry = createTcRegistry();
-  const metadata = await registry.getChainMetadata(chainName);
+  const res = await fetch(`${RAW_CHAINS_BASE}/${chainName}/metadata.yaml`, {
+    signal: AbortSignal.timeout(6000),
+  });
+  if (!res.ok) throw new Error(`registry metadata ${res.status}`);
+  const metadata = parseYaml(await res.text()) as { rpcUrls?: Array<{ http?: string }> };
   const urls = (metadata?.rpcUrls ?? [])
     .map((u) => u.http)
     .filter((u): u is string => !!u && u.startsWith('https://'));
@@ -45,9 +54,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(403).json({ error: 'Method not permitted' });
   }
 
+  // Restrict to a plain chain slug so it can't be used to fetch arbitrary registry paths.
   const chainName = body.chainName;
-  if (typeof chainName !== 'string' || !chainName) {
-    return res.status(400).json({ error: 'Missing chainName' });
+  if (typeof chainName !== 'string' || !/^[a-z0-9]+$/.test(chainName)) {
+    return res.status(400).json({ error: 'Invalid chainName' });
   }
 
   let rpcUrls: string[];
