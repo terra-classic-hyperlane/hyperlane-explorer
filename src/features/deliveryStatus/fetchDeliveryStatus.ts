@@ -43,23 +43,45 @@ export async function fetchDeliveryStatus(
   );
 
   if (isDelivered) {
-    const { tx: txDetails, blockTimestamp } = await fetchTransactionDetails(
-      multiProvider,
-      message.destinationDomainId,
-      transactionHash,
-      blockNumber,
-    );
-    // If a delivery (aka process) tx is found, mark as success
+    const destName = multiProvider.tryGetChainName(message.destinationDomainId);
+    const destProtocol = multiProvider.tryGetChainMetadata(message.destinationDomainId)?.protocol;
+    const isCosmosDestination = destProtocol === 'cosmos';
+
+    let txDetails: Awaited<ReturnType<typeof fetchTransactionDetails>>['tx'] = null;
+    let blockTimestamp: number | null = null;
+    let cosmosFrom: string | null = null;
+
+    if (isCosmosDestination) {
+      if (transactionHash) {
+        const cosmosDetails = await fetchCosmosTransactionDetails(
+          multiProvider,
+          message.destinationDomainId,
+          transactionHash,
+        );
+        blockTimestamp = cosmosDetails.blockTimestamp;
+        cosmosFrom = cosmosDetails.from;
+      }
+    } else {
+      const details = await fetchTransactionDetails(
+        multiProvider,
+        message.destinationDomainId,
+        transactionHash,
+        blockNumber,
+      );
+      txDetails = details.tx;
+      blockTimestamp = details.blockTimestamp;
+    }
+
     const result: MessageDeliverySuccessResult = {
       status: MessageStatus.Delivered,
       deliveryTransaction: {
         timestamp: toDecimalNumber(blockTimestamp ?? 0) * 1000,
         hash: transactionHash || constants.HashZero,
-        from: txDetails?.from || constants.AddressZero,
-        to: txDetails?.to || constants.AddressZero,
+        from: cosmosFrom || txDetails?.from || constants.AddressZero,
+        to: txDetails?.to || (destName ? destMailboxAddr : constants.AddressZero),
         blockHash: txDetails?.blockHash || constants.HashZero,
         blockNumber: toDecimalNumber(blockNumber || 0),
-        mailbox: constants.AddressZero,
+        mailbox: destName ? destMailboxAddr : constants.AddressZero,
         nonce: txDetails?.nonce || 0,
         gasLimit: toDecimalNumber(txDetails?.gasLimit || 0),
         gasPrice: toDecimalNumber(txDetails?.gasPrice || 0),
@@ -72,6 +94,16 @@ export async function fetchDeliveryStatus(
     };
     return result;
   } else {
+    const originProtocol = multiProvider.tryGetChainMetadata(message.originDomainId)?.protocol;
+    const destProtocol = multiProvider.tryGetChainMetadata(message.destinationDomainId)?.protocol;
+    const canDebug = originProtocol === 'ethereum' && destProtocol === 'ethereum';
+
+    if (!canDebug) {
+      // debugMessage uses EVM providers — skip for non-EVM chains
+      const result: MessageDeliveryPendingResult = { status: MessageStatus.Pending };
+      return result;
+    }
+
     const debugResult = await debugMessage(multiProvider, registry, overrideChainMetadata, message);
     const messageStatus =
       debugResult.status === MessageDebugStatus.NoErrorsFound
@@ -109,4 +141,37 @@ async function fetchTransactionDetails(
       : Promise.resolve(null),
   ]);
   return { tx, blockTimestamp: block?.timestamp ?? null };
+}
+
+async function fetchCosmosTransactionDetails(
+  multiProvider: MultiProtocolProvider,
+  domainId: DomainId,
+  txHash: string,
+): Promise<{ blockTimestamp: number | null; from: string | null }> {
+  const meta = multiProvider.tryGetChainMetadata(domainId) as
+    | { restUrls?: Array<{ http: string }> }
+    | null
+    | undefined;
+  const lcdUrl = meta?.restUrls?.[0]?.http;
+  if (!lcdUrl) return { blockTimestamp: null, from: null };
+
+  const hash = txHash.replace(/^0x/, '').toUpperCase();
+  try {
+    const res = await fetch(`${lcdUrl}/cosmos/tx/v1beta1/txs/${hash}`);
+    if (!res.ok) return { blockTimestamp: null, from: null };
+    const data = await res.json();
+    const resp = data?.tx_response;
+    if (!resp) return { blockTimestamp: null, from: null };
+
+    const blockTimestamp = resp.timestamp ? Math.floor(new Date(resp.timestamp).getTime() / 1000) : null;
+    // First signer is the relayer
+    const from: string | null = data?.tx?.auth_info?.signer_infos?.[0]
+      ? (data?.tx?.body?.messages?.[0]?.sender ?? null)
+      : null;
+
+    return { blockTimestamp, from };
+  } catch (e) {
+    logger.debug('Failed to fetch Cosmos delivery tx details', e);
+    return { blockTimestamp: null, from: null };
+  }
 }

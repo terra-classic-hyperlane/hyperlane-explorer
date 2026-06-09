@@ -11,6 +11,7 @@ import { isEvmChain, isPiChain } from '../../chains/utils';
 import type { ExplorerMultiProvider as MultiProtocolProvider } from '../../hyperlane/sdkRuntime';
 import { isValidSearchQuery } from '../queries/useMessageQuery';
 import { PiMessageQuery, PiQueryType, fetchMessagesFromPiChain } from './fetchPiChainMessages';
+import { fetchMessagesFromPiCosmosChain } from './fetchPiCosmosChainMessages';
 
 const MESSAGE_SEARCH_TIMEOUT = 10_000; // 10s
 
@@ -22,12 +23,16 @@ export function usePiChainMessageSearchQuery({
   endTimeFilter,
   piQueryType,
   pause,
+  originChainFilter,
+  destinationChainFilter,
 }: {
   sanitizedInput: string;
   startTimeFilter?: number | null;
   endTimeFilter?: number | null;
   piQueryType?: PiQueryType;
   pause: boolean;
+  originChainFilter?: string | null;
+  destinationChainFilter?: string | null;
 }) {
   const { scrapedDomains: scrapedChains } = useScrapedDomains();
   const multiProvider = useReadyMultiProvider();
@@ -43,25 +48,72 @@ export function usePiChainMessageSearchQuery({
       multiProviderVersion,
       registry,
       pause,
+      originChainFilter,
+      destinationChainFilter,
     ],
     queryFn: async () => {
+      if (pause || !multiProvider) return [];
+
       const hasInput = !!sanitizedInput;
       const isValidInput = isValidSearchQuery(sanitizedInput);
-      if (pause || !multiProvider || !hasInput || !isValidInput) return [];
-      logger.debug('Starting PI Chain message search for:', sanitizedInput);
-      // TODO handle time-based filters here
-      const query = { input: ensure0x(sanitizedInput) };
       const allChains: ChainMetadata[] = Object.values(multiProvider.metadata);
-      const piChains = allChains.filter(
+
+      const cosmosPiChains = allChains.filter(
+        (c) =>
+          c.domainId !== undefined &&
+          c.protocol === 'cosmos' &&
+          isPiChain(multiProvider, scrapedChains, c.domainId),
+      );
+
+      // When a chain filter selects a Cosmos PI chain but there's no search text,
+      // fetch recent dispatches from that chain directly.
+      const chainFilterName = originChainFilter || destinationChainFilter;
+      const filteredCosmosPiChain =
+        !hasInput && chainFilterName
+          ? cosmosPiChains.find((c) => c.name === chainFilterName)
+          : undefined;
+
+      if (filteredCosmosPiChain) {
+        logger.debug('Fetching recent Cosmos PI messages for chain:', filteredCosmosPiChain.name);
+        try {
+          const messages = await timeout(
+            fetchMessagesFromPiCosmosChain(
+              filteredCosmosPiChain,
+              { input: 'recent' },
+              multiProvider,
+              registry,
+            ),
+            MESSAGE_SEARCH_TIMEOUT,
+            'cosmos pi recent timeout',
+          );
+          return messages;
+        } catch {
+          return [];
+        }
+      }
+
+      if (!hasInput || !isValidInput) return [];
+      logger.debug('Starting PI Chain message search for:', sanitizedInput);
+      const query = { input: ensure0x(sanitizedInput) };
+
+      const evmPiChains = allChains.filter(
         (c) =>
           c.domainId !== undefined &&
           isEvmChain(multiProvider, c.domainId) &&
           isPiChain(multiProvider, scrapedChains, c.domainId),
       );
+
       try {
-        const results = await Promise.allSettled(
-          piChains.map((c) => fetchMessages(c, query, multiProvider, registry, piQueryType)),
-        );
+        const results = await Promise.allSettled([
+          ...evmPiChains.map((c) => fetchMessages(c, query, multiProvider, registry, piQueryType)),
+          ...cosmosPiChains.map((c) =>
+            timeout(
+              fetchMessagesFromPiCosmosChain(c, query, multiProvider, registry),
+              MESSAGE_SEARCH_TIMEOUT,
+              'cosmos pi search timeout',
+            ),
+          ),
+        ]);
         return results
           .filter(
             (result): result is PromiseFulfilledResult<Message[]> => result.status === 'fulfilled',
@@ -119,14 +171,12 @@ async function fetchMessages(
   registry: IRegistry,
   queryType?: PiQueryType,
 ): Promise<Message[]> {
-  let messages: Message[];
   try {
-    messages = await timeout(
+    return await timeout(
       fetchMessagesFromPiChain(chainMetadata, query, multiProvider, registry, queryType),
       MESSAGE_SEARCH_TIMEOUT,
       'message search timeout',
     );
-    return messages;
   } catch (error) {
     logger.debug('Error fetching PI messages for chain:', chainMetadata.name, error);
     throw error;

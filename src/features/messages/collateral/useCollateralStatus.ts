@@ -187,13 +187,13 @@ export function useCollateralStatus(
     data: collateralBalance,
     isLoading,
     error,
-  } = useQuery({
+  } = useQuery<bigint | null>({
     // multiProvider is stable from store and doesn't need to be in the key
     // eslint-disable-next-line @tanstack/query/exhaustive-deps
     queryKey,
-    queryFn: () => {
-      if (!destinationToken || !multiProvider) return Promise.resolve(undefined);
-      return fetchCollateralBalance(destinationToken, multiProvider);
+    queryFn: async () => {
+      if (!destinationToken || !multiProvider) return null;
+      return (await fetchCollateralBalance(destinationToken, multiProvider)) ?? null;
     },
     enabled: !!destinationToken && shouldCheck && !!multiProvider,
     refetchInterval: COLLATERAL_REFETCH_INTERVAL,
@@ -216,7 +216,7 @@ export function useCollateralStatus(
     return { status: CollateralStatus.Checking };
   }
 
-  if (collateralBalance === undefined) {
+  if (collateralBalance === undefined || collateralBalance === null) {
     return { status: CollateralStatus.Unknown };
   }
 

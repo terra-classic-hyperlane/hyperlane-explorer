@@ -1,9 +1,57 @@
 import { Mailbox__factory as MailboxFactory } from '@hyperlane-xyz/core';
-import { messageId } from '@hyperlane-xyz/utils';
+import { bytesToAddressCosmos, messageId } from '@hyperlane-xyz/utils';
 
 import { DELIVERY_LOG_CHECK_BLOCK_RANGE } from '../../consts/values';
 import { logger } from '../../utils/logger';
 import type { ExplorerMultiProvider as MultiProtocolProvider } from '../hyperlane/sdkRuntime';
+
+const COSMOS_PROCESS_SEARCH_LIMIT = 50;
+
+async function checkIsCosmosMessageDelivered(
+  msgId: string,
+  rpcUrl: string,
+  mailboxBech32: string,
+): Promise<{ isDelivered: boolean; transactionHash?: string; blockNumber?: number }> {
+  const normalizedId = msgId.replace(/^0x/, '').toLowerCase();
+  try {
+    const res = await fetch(rpcUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'tx_search',
+        params: {
+          query: `execute._contract_address='${mailboxBech32}'`,
+          order_by: 'desc',
+          per_page: String(COSMOS_PROCESS_SEARCH_LIMIT),
+          page: '1',
+        },
+      }),
+    });
+    const data = await res.json();
+    const txs: Array<{ hash: string; height: string; tx_result: { events: Array<{ type: string; attributes: Array<{ key: string; value: string }> }> } }> =
+      data?.result?.txs || [];
+
+    for (const tx of txs) {
+      const processIdEv = tx.tx_result.events.find((e) => e.type === 'wasm-mailbox_process_id');
+      if (!processIdEv) continue;
+      const attrs: Record<string, string> = {};
+      for (const a of processIdEv.attributes) attrs[a.key] = a.value ?? '';
+      const mid = (attrs['message_id'] || '').replace(/^0x/, '').toLowerCase();
+      if (mid === normalizedId) {
+        return {
+          isDelivered: true,
+          transactionHash: tx.hash,
+          blockNumber: parseInt(tx.height, 10),
+        };
+      }
+    }
+  } catch (e) {
+    logger.debug('Cosmos delivery check failed', e);
+  }
+  return { isDelivered: false };
+}
 
 function getMailboxAddress(
   multiProvider: Pick<MultiProtocolProvider, 'tryGetChainMetadata'>,
@@ -91,6 +139,20 @@ export async function checkIsMessageDelivered(
   blockNumber?: number;
 }> {
   const destMetadata = multiProvider.tryGetChainMetadata(destinationChainName);
+  if (destMetadata?.protocol === 'cosmos') {
+    const rpcUrl = (destMetadata as { rpcUrls?: Array<{ http: string }> }).rpcUrls?.[0]?.http;
+    const bech32Prefix = (destMetadata as { bech32Prefix?: string }).bech32Prefix;
+    if (rpcUrl && bech32Prefix) {
+      try {
+        const bytes = Buffer.from(mailboxAddr.replace(/^0x/, ''), 'hex');
+        const mailboxBech32 = bytesToAddressCosmos(bytes, bech32Prefix);
+        return checkIsCosmosMessageDelivered(msgId, rpcUrl, mailboxBech32);
+      } catch (e) {
+        logger.debug('Failed to resolve Cosmos mailbox bech32 for delivery check', e);
+      }
+    }
+    return { isDelivered: false };
+  }
   if (destMetadata?.protocol !== 'ethereum') {
     logger.debug('Skipping delivery check for non-EVM chain', { destinationChainName });
     return { isDelivered: false };

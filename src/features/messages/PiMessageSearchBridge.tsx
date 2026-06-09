@@ -8,11 +8,15 @@ export function PiMessageSearchBridge({
   onStateChange,
   sanitizedInput,
   startTimeFilter,
+  originChainFilter,
+  destinationChainFilter,
 }: {
   endTimeFilter: number | null;
   onStateChange: (state: PiMessageSearchState) => void;
   sanitizedInput: string;
   startTimeFilter: number | null;
+  originChainFilter?: string | null;
+  destinationChainFilter?: string | null;
 }) {
   const { hasRun, isError, isFetching, isMessagesFound, messageList } =
     usePiChainMessageSearchQuery({
@@ -20,6 +24,8 @@ export function PiMessageSearchBridge({
       startTimeFilter,
       endTimeFilter,
       pause: false,
+      originChainFilter,
+      destinationChainFilter,
     });
 
   useEffect(() => {

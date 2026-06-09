@@ -22,6 +22,7 @@ import { DetailCardSkeleton, DetailSectionSkeleton } from './MessageDetailsLoadi
 import type { MessageDetailsRuntimeState } from './MessageDetailsRuntime';
 import { PLACEHOLDER_MESSAGE } from './placeholderMessages';
 import { useMessageQuery } from './queries/useMessageQuery';
+import { useSupplementalIgpData } from './useSupplementalIgpData';
 import { parseWarpRouteMessageDetails } from './utils';
 
 const ContentDetailsCard = dynamic(
@@ -97,7 +98,11 @@ export function MessageDetailsInner({ messageId, message: messageFromUrlParams }
   const needsRuntimeMessageLookup =
     !baseIsMessageFound && !hasDetailedUrlMessage && hasGraphQlRun && !isGraphQlMessageFound;
   const activeRuntimeState = runtimeState?.messageId === messageId ? runtimeState.value : null;
-  const message = activeRuntimeState?.message || baseMessage;
+  const rawMessage = activeRuntimeState?.message || baseMessage;
+  const supplementalIgp = useSupplementalIgpData(rawMessage);
+  const message: typeof rawMessage = supplementalIgp
+    ? { ...rawMessage, ...supplementalIgp }
+    : rawMessage;
   const isMessageFound = activeRuntimeState?.isMessageFound ?? baseIsMessageFound;
   const isFetching =
     isGraphQlFetching ||
@@ -115,10 +120,10 @@ export function MessageDetailsInner({ messageId, message: messageFromUrlParams }
     ? getHumanReadableDuration(destination.timestamp - origin.timestamp, 3)
     : undefined;
   const showTimeline =
-    !isPiMsg &&
     'blockNumber' in origin &&
-    isEvmChain(chainMetadataResolver, originDomainId) &&
-    isEvmChain(chainMetadataResolver, destinationDomainId);
+    (isPiMsg ||
+      (isEvmChain(chainMetadataResolver, originDomainId) &&
+        isEvmChain(chainMetadataResolver, destinationDomainId)));
   const originChainName = chainMetadataResolver.tryGetChainName(originDomainId) || 'Unknown';
   const destinationChainName =
     chainMetadataResolver.tryGetChainName(destinationDomainId) || 'Unknown';

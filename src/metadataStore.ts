@@ -1,5 +1,5 @@
 import type { IRegistry } from '@hyperlane-xyz/registry';
-import { GithubRegistry } from '@hyperlane-xyz/registry';
+import { createTcRegistry } from './tc-overrides/registry';
 import {
   createChainMetadataResolver,
   type ChainMetadataResolver,
@@ -17,7 +17,6 @@ import { useMemo } from 'react';
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 
-import { config } from './consts/config';
 import { DomainsEntry } from './features/chains/queries/fragments';
 import { clearPrefetchedMessages } from './features/messages/queries/prefetch';
 import { logger } from './utils/logger';
@@ -116,11 +115,7 @@ export const useStore = create<MetadataState>()(
           }
         }
       },
-      registry: new GithubRegistry({
-        proxyUrl: config.githubProxy,
-        uri: config.registryUrl,
-        branch: config.registryBranch,
-      }),
+      registry: createTcRegistry(),
       setRegistry: (registry: IRegistry) => {
         chainMetadataRequest = null;
         warpRouteDataRequest = null;
@@ -244,14 +239,7 @@ async function loadWarpRouteData(registry: IRegistry): Promise<{
   return buildWarpRouteMaps(warpRouteConfigs);
 }
 
-function canUsePublishedWarpRouteFallback(registry: IRegistry) {
-  if (!(registry instanceof GithubRegistry)) return false;
-
-  const githubRegistry = registry as GithubRegistry & Record<string, unknown>;
-  return (
-    typeof githubRegistry.uri === 'string' &&
-    typeof githubRegistry.branch === 'string' &&
-    githubRegistry.uri === config.registryUrl &&
-    githubRegistry.branch === config.registryBranch
-  );
+function canUsePublishedWarpRouteFallback(_registry: IRegistry) {
+  // TC registry always used — never fall back to the official npm package data
+  return false;
 }

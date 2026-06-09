@@ -202,11 +202,12 @@ export function MessageSearch() {
     warpRouteAddresses,
   );
 
-  const shouldRunPiSearch = !!sanitizedInput && hasRun && !isMessagesFound;
+  const shouldRunPiSearch =
+    hasRun && !isMessagesFound && (!!sanitizedInput || !!originChainFilter || !!destinationChainFilter);
 
   useEffect(() => {
     setPiSearchState(DEFAULT_PI_MESSAGE_SEARCH_STATE);
-  }, [sanitizedInput, startTimeFilter, endTimeFilter]);
+  }, [sanitizedInput, startTimeFilter, endTimeFilter, originChainFilter, destinationChainFilter]);
 
   const prevShouldRunPiSearchRef = useRef(shouldRunPiSearch);
   useEffect(() => {
@@ -344,11 +345,13 @@ export function MessageSearch() {
       />
       {shouldRunPiSearch && (
         <PiMessageSearchBridge
-          key={`${sanitizedInput}:${startTimeFilter ?? ''}:${endTimeFilter ?? ''}`}
+          key={`${sanitizedInput}:${startTimeFilter ?? ''}:${endTimeFilter ?? ''}:${originChainFilter ?? ''}:${destinationChainFilter ?? ''}`}
           sanitizedInput={sanitizedInput}
           startTimeFilter={startTimeFilter}
           endTimeFilter={endTimeFilter}
           onStateChange={setPiSearchState}
+          originChainFilter={originChainFilter}
+          destinationChainFilter={destinationChainFilter}
         />
       )}
       <Card className="relative mt-4 min-h-[38rem] w-full" padding="">

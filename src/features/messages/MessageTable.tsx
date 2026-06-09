@@ -20,8 +20,12 @@ import { getHumanReadableTimeString } from '../../utils/time';
 import { useScrapedDomains } from '../chains/queries/useScrapedChains';
 import { getChainDisplayName } from '../chains/utils';
 import { prefetchMessageDetailShell } from './navigationPrefetch';
-import { prefetchMessageDetails, prefetchMessageStub } from './queries/prefetch';
-import { parseWarpRouteMessageDetails, serializeMessage } from './utils';
+import {
+  prefetchMessageDetails,
+  prefetchMessageStub,
+  prefetchPiMessageDetails,
+} from './queries/prefetch';
+import { parseWarpRouteMessageDetails } from './utils';
 
 const BACKGROUND_PREFETCH_COUNT = 5;
 
@@ -153,7 +157,6 @@ export const MessageSummaryRow = memo(function MessageSummaryRow({
     );
   }
 
-  const base64 = message.isPiMsg ? serializeMessage(message) : undefined;
   const detailPath = `/message/${msgId}`;
   const primeDetailPage = () => {
     if (hasPrimedDetailPage.current) return;
@@ -184,7 +187,6 @@ export const MessageSummaryRow = memo(function MessageSummaryRow({
     <>
       <LinkCell
         path={detailPath}
-        base64={base64}
         aClasses="flex items-center py-2.5 pl-3 sm:pl-5"
         onNavigateIntent={primeDetailPage}
       >
@@ -195,7 +197,6 @@ export const MessageSummaryRow = memo(function MessageSummaryRow({
       </LinkCell>
       <LinkCell
         path={detailPath}
-        base64={base64}
         aClasses="flex items-center py-2.5"
         onNavigateIntent={primeDetailPage}
       >
@@ -206,7 +207,6 @@ export const MessageSummaryRow = memo(function MessageSummaryRow({
       </LinkCell>
       <LinkCell
         path={detailPath}
-        base64={base64}
         tdClasses="hidden sm:table-cell"
         aClasses={styles.value}
         onNavigateIntent={primeDetailPage}
@@ -215,7 +215,6 @@ export const MessageSummaryRow = memo(function MessageSummaryRow({
       </LinkCell>
       <LinkCell
         path={detailPath}
-        base64={base64}
         tdClasses="hidden sm:table-cell"
         aClasses={styles.value}
         onNavigateIntent={primeDetailPage}
@@ -224,7 +223,6 @@ export const MessageSummaryRow = memo(function MessageSummaryRow({
       </LinkCell>
       <LinkCell
         path={detailPath}
-        base64={base64}
         tdClasses="hidden lg:table-cell"
         aClasses={styles.valueTruncated}
         onNavigateIntent={primeDetailPage}
@@ -233,7 +231,6 @@ export const MessageSummaryRow = memo(function MessageSummaryRow({
       </LinkCell>
       <LinkCell
         path={detailPath}
-        base64={base64}
         aClasses={styles.valueTruncated}
         onNavigateIntent={primeDetailPage}
       >
@@ -241,7 +238,6 @@ export const MessageSummaryRow = memo(function MessageSummaryRow({
       </LinkCell>
       <LinkCell
         path={detailPath}
-        base64={base64}
         aClasses={`flex items-center py-2.5 ${warpRouteDetails ? 'ml-4' : 'justify-center'}`}
         tdClasses="hidden sm:table-cell"
         onNavigateIntent={primeDetailPage}
@@ -275,7 +271,6 @@ export const MessageSummaryRow = memo(function MessageSummaryRow({
       </LinkCell>
       <LinkCell
         path={detailPath}
-        base64={base64}
         tdClasses="w-8"
         onNavigateIntent={primeDetailPage}
       >
@@ -335,7 +330,12 @@ async function prefetchMessageNavigation(
   void prefetchMessageDetailShell();
   prefetchMessageStub(message);
 
-  if (message.isPiMsg || !scrapedChains.length) return;
+  if (message.isPiMsg) {
+    // Cache PI message details in memory so the detail page loads without ?data= in the URL
+    prefetchPiMessageDetails(message as Parameters<typeof prefetchPiMessageDetails>[0]);
+    return;
+  }
 
+  if (!scrapedChains.length) return;
   await prefetchMessageDetails(message.msgId, chainMetadataResolver, scrapedChains);
 }

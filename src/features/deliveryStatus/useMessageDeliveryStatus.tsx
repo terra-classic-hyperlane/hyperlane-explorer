@@ -9,8 +9,6 @@ import { useMultiProviderVersion, useReadyMultiProvider, useRegistry, useStore }
 import { Message, MessageStatus, MessageStub } from '../../types';
 import { logger } from '../../utils/logger';
 import { MissingChainConfigToast } from '../chains/MissingChainConfigToast';
-import { isEvmChain } from '../chains/utils';
-import type { ExplorerMultiProvider as MultiProtocolProvider } from '../hyperlane/sdkRuntime';
 
 type DeliveryStatusQueryMessage = MessageStub &
   Partial<Pick<Message, 'decodedBody' | 'totalGasAmount' | 'totalPayment' | 'numPayments'>>;
@@ -56,10 +54,18 @@ export function useMessageDeliveryStatus({
 
       const { id, originDomainId, destinationDomainId } = messageForQuery;
 
-      if (
-        !checkChain(multiProvider, originDomainId) ||
-        !checkChain(multiProvider, destinationDomainId)
-      ) {
+      if (!multiProvider.hasChain(originDomainId)) {
+        toast.error(<MissingChainConfigToast domainId={originDomainId} />);
+        return { message: messageForQuery };
+      }
+      if (!multiProvider.hasChain(destinationDomainId)) {
+        toast.error(<MissingChainConfigToast domainId={destinationDomainId} />);
+        return { message: messageForQuery };
+      }
+      // Allow Cosmos destinations — checkIsMessageDelivered handles them via RPC tx_search
+      const destProtocol = multiProvider.tryGetChainMetadata(destinationDomainId)?.protocol;
+      if (destProtocol !== 'ethereum' && destProtocol !== 'cosmos') {
+        logger.debug('Skipping delivery status check for unsupported protocol:', destProtocol);
         return { message: messageForQuery };
       }
 
@@ -125,14 +131,3 @@ function createDeliveryStatusQueryMessage(
   };
 }
 
-function checkChain(multiProvider: MultiProtocolProvider, domainId: number) {
-  if (!multiProvider.hasChain(domainId)) {
-    toast.error(<MissingChainConfigToast domainId={domainId} />);
-    return false;
-  }
-  if (!isEvmChain(multiProvider, domainId)) {
-    logger.debug('Skipping delivery status check for non-EVM chain:', domainId);
-    return false;
-  }
-  return true;
-}

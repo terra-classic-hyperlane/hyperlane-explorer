@@ -26,10 +26,18 @@ export async function loadChainMetadata(
   const metadataWithLogos = await promiseObjAll(
     objMap(
       registryChainMetadata,
-      async (chainName, metadata): Promise<ChainMetadata> => ({
-        ...metadata,
-        logoURI: `${links.imgPath}/chains/${chainName}/logo.svg`,
-      }),
+      async (chainName, metadata): Promise<ChainMetadata> => {
+        let logoURI: string;
+        if (!metadata.logoURI) {
+          logoURI = `${links.imgPath}/chains/${chainName}/logo.svg`;
+        } else if (metadata.logoURI.startsWith('http')) {
+          logoURI = metadata.logoURI;
+        } else {
+          // Relative path — resolve via registry so it points to the correct source
+          logoURI = registry.getUri(metadata.logoURI);
+        }
+        return { ...metadata, logoURI };
+      },
     ),
   );
 

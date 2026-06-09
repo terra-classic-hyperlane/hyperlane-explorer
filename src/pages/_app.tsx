@@ -43,6 +43,39 @@ function useIsSsr() {
   return isSsr;
 }
 
+// Suppress uncaught errors from browser extensions (e.g. TronLink) in dev overlay
+if (typeof window !== 'undefined') {
+  const isExtensionError = (source: string | undefined, stack: string | undefined) =>
+    source?.startsWith('chrome-extension://') ||
+    source?.startsWith('moz-extension://') ||
+    stack?.includes('chrome-extension://') ||
+    stack?.includes('moz-extension://') ||
+    false;
+
+  window.addEventListener(
+    'error',
+    (event) => {
+      if (isExtensionError(event.filename, (event.error as Error)?.stack)) {
+        event.stopImmediatePropagation();
+        event.preventDefault();
+      }
+    },
+    true,
+  );
+
+  window.addEventListener(
+    'unhandledrejection',
+    (event) => {
+      const stack = (event.reason as Error)?.stack || String(event.reason ?? '');
+      if (isExtensionError(undefined, stack)) {
+        event.stopImmediatePropagation();
+        event.preventDefault();
+      }
+    },
+    true,
+  );
+}
+
 export default function App({ Component, router, pageProps }: AppProps) {
   // Disable app SSR for now as it's not needed and
   // complicates graphql integration. However, we still need to render

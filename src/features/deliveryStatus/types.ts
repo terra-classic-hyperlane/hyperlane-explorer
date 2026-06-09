@@ -17,7 +17,7 @@ export interface MessageDeliveryFailingResult extends MessageDeliveryResult {
 
 export interface MessageDeliveryPendingResult extends MessageDeliveryResult {
   status: MessageStatus.Pending;
-  debugResult: MessageDebugResult;
+  debugResult?: MessageDebugResult;
 }
 
 export type MessageDeliveryStatusResponse =

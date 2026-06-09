@@ -27,6 +27,26 @@ export default function Document() {
         <meta name="apple-mobile-web-app-capable" content="yes" />
       </Head>
       <body className="font-sans text-black" style={{ backgroundColor: '#f8f8ff' }}>
+        {/* Suppress browser extension errors (e.g. TronLink) before Next.js dev overlay captures them */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `(function(){
+  function isExt(s){return typeof s==='string'&&(s.indexOf('chrome-extension://')>=0||s.indexOf('moz-extension://')>=0);}
+  var _oe=window.onerror;
+  window.onerror=function(msg,src,line,col,err){
+    if(isExt(src)||isExt(err&&err.stack)){return true;}
+    return typeof _oe==='function'?_oe.apply(this,arguments):false;
+  };
+  window.addEventListener('error',function(e){
+    if(isExt(e.filename)||isExt(e.error&&e.error.stack)){e.stopImmediatePropagation();e.preventDefault();}
+  },true);
+  window.addEventListener('unhandledrejection',function(e){
+    var s=String((e.reason&&e.reason.stack)||e.reason||'');
+    if(isExt(s)){e.stopImmediatePropagation();e.preventDefault();}
+  },true);
+})();`,
+          }}
+        />
         <Main />
         <NextScript />
       </body>

@@ -313,6 +313,77 @@ function logToMessage(
   }
 }
 
+/**
+ * Fetches IGP gas payments for a message from the origin chain using the registry IGP address.
+ * Useful for supplementing GraphQL messages that have 0 gas data because their IGP
+ * differs from the official Hyperlane IGP tracked by the Hasura DB.
+ */
+// Both standard IGP ABI and newer IGP ABI with destinationDomain param
+const IGP_GAS_PAYMENT_IFACE = new ethers.utils.Interface([
+  'event GasPayment(bytes32 indexed messageId, uint256 gasAmount, uint256 payment)',
+  'event GasPayment(bytes32 messageId, uint32 destinationDomain, uint256 gasAmount, uint256 payment)',
+]);
+const GAS_PAYMENT_TOPICS = new Set([
+  IGP_GAS_PAYMENT_IFACE.getEventTopic('GasPayment(bytes32,uint256,uint256)'),
+  ethers.utils.keccak256(ethers.utils.toUtf8Bytes('GasPayment(bytes32,uint32,uint256,uint256)')),
+]);
+
+/**
+ * Fetches IGP gas payments for a message by reading the origin tx receipt directly.
+ * This avoids historical log queries (which time out on chains like BSC) and works
+ * regardless of which IGP address was used.
+ */
+export async function fetchIgpGasPaymentsFromRegistry(
+  message: Message,
+  multiProvider: MultiProtocolProvider,
+  _registry: IRegistry,
+): Promise<{ numPayments: number; totalGasAmount: string; totalPayment: string } | null> {
+  try {
+    const txHash = message.origin?.hash;
+    if (!txHash) return null;
+
+    const provider = multiProvider.getEthersV5Provider(message.originDomainId);
+    const receipt = await provider.getTransactionReceipt(txHash);
+    if (!receipt) return null;
+
+    const msgIdNorm = message.msgId.toLowerCase();
+
+    let totalGasAmount = BigNumber.from(0);
+    let totalPayment = BigNumber.from(0);
+    let count = 0;
+
+    for (const log of receipt.logs) {
+      if (!GAS_PAYMENT_TOPICS.has(log.topics[0])) continue;
+
+      // Standard ABI: GasPayment(bytes32 indexed messageId, ...)
+      // topic1 = messageId
+      const logMsgId = log.topics[1]?.toLowerCase();
+      if (logMsgId !== msgIdNorm) continue;
+
+      // Decode data: standard=(gasAmount,payment), extended=(gasAmount,payment)
+      // Both have gasAmount and payment as the last two uint256 values in data
+      const decoded = ethers.utils.defaultAbiCoder.decode(
+        ['uint256', 'uint256'],
+        '0x' + log.data.slice(-128), // last 128 hex chars = 2 × uint256
+      );
+      totalGasAmount = totalGasAmount.add(decoded[0]);
+      totalPayment = totalPayment.add(decoded[1]);
+      count++;
+    }
+
+    if (!count) return null;
+    logger.debug(`Supplemental IGP: ${count} payments from tx receipt for ${message.msgId}`);
+    return {
+      numPayments: count,
+      totalGasAmount: totalGasAmount.toString(),
+      totalPayment: totalPayment.toString(),
+    };
+  } catch (e) {
+    logger.debug('Supplemental IGP fetch failed', e);
+    return null;
+  }
+}
+
 // Fetch and sum all IGP gas payments for a given message
 async function tryFetchIgpGasPayments(
   message: Message,

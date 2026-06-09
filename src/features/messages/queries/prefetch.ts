@@ -88,6 +88,10 @@ function setPrefetchedMessageDetails(message: Message) {
   setPrefetchedValue(prefetchedMessageDetails, normalizeMessageCacheKey(message.msgId), message);
 }
 
+export function prefetchPiMessageDetails(message: Message) {
+  setPrefetchedMessageDetails(message);
+}
+
 function normalizeMessageCacheKey(messageId: string) {
   return messageId.toLowerCase();
 }

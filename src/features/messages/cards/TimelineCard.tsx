@@ -1,6 +1,7 @@
 import { MessageTimeline, useMessageStage } from '@hyperlane-xyz/widgets';
 
 import { Card } from '../../../components/layout/Card';
+import { useReadyMultiProvider } from '../../../store';
 import { Message, MessageStub } from '../../../types';
 
 interface Props {
@@ -9,8 +10,9 @@ interface Props {
 }
 
 export function TimelineCard({ message, blur }: Props) {
+  const multiProvider = useReadyMultiProvider();
   // @ts-ignore TODO update widget chainId type
-  const { stage, timings } = useMessageStage({ message });
+  const { stage, timings } = useMessageStage({ message, multiProvider });
 
   return (
     <Card className="w-full !bg-transparent !shadow-none">
