@@ -93,7 +93,7 @@ export function MessageTable({
       <tbody>
         {messageList.map((m) => (
           <tr
-            key={`message-${m.id}`}
+            key={`message-${m.msgId || m.id}`}
             className={`relative cursor-pointer border-b border-primary-50 last:border-0 hover:bg-accent-50 active:bg-accent-100 ${
               isFetching && 'blur-xs'
             } transition-all duration-500`}
