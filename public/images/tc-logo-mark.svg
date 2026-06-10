@@ -1,0 +1,44 @@
+<svg width="64" height="64" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Terra Classic">
+  <defs>
+    <linearGradient id="tcOrbA" x1="4" y1="8" x2="60" y2="56" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#5FE3EF" />
+      <stop offset="1" stop-color="#5B8BFF" />
+    </linearGradient>
+    <linearGradient id="tcOrbB" x1="60" y1="8" x2="4" y2="56" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#7C5CFF" />
+      <stop offset="1" stop-color="#3FD0E6" />
+    </linearGradient>
+    <radialGradient id="tcLuna" cx="0.42" cy="0.38" r="0.7">
+      <stop stop-color="#FFE9A8" />
+      <stop offset="0.55" stop-color="#F6C24E" />
+      <stop offset="1" stop-color="#E89A2E" />
+    </radialGradient>
+    <filter id="tcGlow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="1.4" result="b" />
+      <feMerge>
+        <feMergeNode in="b" />
+        <feMergeNode in="SourceGraphic" />
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- interchain orbits (bridge) -->
+  <g fill="none" stroke-width="2.6" stroke-linecap="round">
+    <ellipse cx="32" cy="32" rx="27" ry="10.5" stroke="url(#tcOrbA)" transform="rotate(32 32 32)" />
+    <ellipse cx="32" cy="32" rx="27" ry="10.5" stroke="url(#tcOrbB)" transform="rotate(-32 32 32)" opacity="0.92" />
+  </g>
+
+  <!-- connected chain nodes on the orbits -->
+  <g filter="url(#tcGlow)">
+    <circle cx="8.7" cy="17.4" r="3.1" fill="#5FE3EF" />
+    <circle cx="55.3" cy="46.6" r="3.1" fill="#5B8BFF" />
+    <circle cx="8.7" cy="46.6" r="3.1" fill="#7C5CFF" />
+    <circle cx="55.3" cy="17.4" r="3.1" fill="#3FD0E6" />
+  </g>
+
+  <!-- Luna core -->
+  <g filter="url(#tcGlow)">
+    <circle cx="32" cy="32" r="8.6" fill="url(#tcLuna)" />
+    <circle cx="32" cy="32" r="8.6" fill="none" stroke="#FFFFFF" stroke-opacity="0.28" stroke-width="0.9" />
+  </g>
+</svg>
