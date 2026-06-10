@@ -13,7 +13,12 @@ import {
   SearchInvalidError,
   SearchUnknownError,
 } from '../../components/search/SearchStates';
-import { useChainMetadataReady, useStore, useWarpRouteIdToAddressesMap } from '../../metadataStore';
+import {
+  useChainMetadataMap,
+  useChainMetadataReady,
+  useStore,
+  useWarpRouteIdToAddressesMap,
+} from '../../metadataStore';
 import { MessageStatusFilter } from '../../types';
 import { logger } from '../../utils/logger';
 import { tryToDecimalNumber } from '../../utils/number';
@@ -202,8 +207,15 @@ export function MessageSearch() {
     warpRouteAddresses,
   );
 
+  // This explorer is dedicated to the Terra Classic community, so the home feed should
+  // show recent Terra Classic activity (a PI/Cosmos chain) rather than the global Hasura
+  // feed. Run the PI search on the landing page (no input/filter) as well.
+  const isLandingFeed = !sanitizedInput && !originChainFilter && !destinationChainFilter;
   const shouldRunPiSearch =
-    hasRun && !isMessagesFound && (!!sanitizedInput || !!originChainFilter || !!destinationChainFilter);
+    hasRun &&
+    (isLandingFeed ||
+      (!isMessagesFound &&
+        (!!sanitizedInput || !!originChainFilter || !!destinationChainFilter)));
 
   useEffect(() => {
     setPiSearchState(DEFAULT_PI_MESSAGE_SEARCH_STATE);
@@ -221,8 +233,33 @@ export function MessageSearch() {
   const isAnyFetching = isFetching || piSearchState.isFetching;
   const isAnyError = isError || piSearchState.isError;
   const hasAllRun = hasRun && (!shouldRunPiSearch || piSearchState.hasRun);
-  const isAnyMessageFound = isMessagesFound || piSearchState.isMessagesFound;
-  const messageListResult = isMessagesFound ? messageList : piSearchState.messageList;
+
+  // Restrict everything shown to messages where Terra Classic is the origin or destination.
+  // This explorer is dedicated to the Terra Classic community, so unrelated routes from the
+  // global Hasura feed (e.g. Solana↔ETH) are filtered out.
+  const chainMetadataMap = useChainMetadataMap();
+  const tcDomainIds = useMemo(() => {
+    const ids = new Set<number>();
+    for (const c of Object.values(chainMetadataMap)) {
+      if (c?.name?.startsWith('terraclassic') && typeof c.domainId === 'number') ids.add(c.domainId);
+    }
+    return ids;
+  }, [chainMetadataMap]);
+
+  const messageListResult = useMemo(() => {
+    const merged = [...(messageList || []), ...(piSearchState.messageList || [])];
+    const seen = new Set<string>();
+    return merged
+      .filter((m) => tcDomainIds.has(m.originDomainId) || tcDomainIds.has(m.destinationDomainId))
+      .filter((m) => {
+        if (seen.has(m.msgId)) return false;
+        seen.add(m.msgId);
+        return true;
+      })
+      .sort((a, b) => (b.origin?.timestamp ?? 0) - (a.origin?.timestamp ?? 0));
+  }, [messageList, piSearchState.messageList, tcDomainIds]);
+
+  const isAnyMessageFound = messageListResult.length > 0;
 
   // Compute redirect URL for direct message/tx lookups
   const router = useRouter();

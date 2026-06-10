@@ -10,6 +10,19 @@ const TC_REGISTRY_BRANCH = 'main';
 // include these chains, we fetch them individually and merge them in.
 const TC_EXTRA_CHAINS = ['terraclassic', 'terraclassictestnet'];
 
+// Deployer label shown for Terra Classic chains (e.g. in the chain search menu),
+// overriding the widget's "Unknown deployer" fallback when metadata has no deployer.
+const TC_DEPLOYER = { name: 'Terra Classic Community' };
+
+// Stamp the Terra Classic deployer on TC chains that don't already declare one.
+function withTcDeployer(metadata: ChainMap<ChainMetadata>): ChainMap<ChainMetadata> {
+  for (const name of TC_EXTRA_CHAINS) {
+    const chain = metadata[name];
+    if (chain && !chain.deployer) metadata[name] = { ...chain, deployer: TC_DEPLOYER };
+  }
+  return metadata;
+}
+
 export class TcRegistry extends GithubRegistry {
   constructor() {
     super({ uri: TC_REGISTRY_URL, branch: TC_REGISTRY_BRANCH });
@@ -18,14 +31,14 @@ export class TcRegistry extends GithubRegistry {
   override async getMetadata(): Promise<ChainMap<ChainMetadata>> {
     const metadata = await super.getMetadata();
     const missing = TC_EXTRA_CHAINS.filter((c) => !metadata[c]);
-    if (!missing.length) return metadata;
+    if (!missing.length) return withTcDeployer({ ...metadata });
 
     const fetched = await Promise.all(missing.map((c) => this.getChainMetadata(c)));
     const extra: ChainMap<ChainMetadata> = {};
     fetched.forEach((m, i) => {
       if (m) extra[missing[i]] = m;
     });
-    return { ...metadata, ...extra };
+    return withTcDeployer({ ...metadata, ...extra });
   }
 }
 

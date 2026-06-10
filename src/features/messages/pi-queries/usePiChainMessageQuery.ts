@@ -65,34 +65,35 @@ export function usePiChainMessageSearchQuery({
           isPiChain(multiProvider, scrapedChains, c.domainId),
       );
 
-      // When a chain filter selects a Cosmos PI chain but there's no search text,
-      // fetch recent dispatches from that chain directly.
+      // No search text → show recent dispatches. With a chain filter, limit to that
+      // Cosmos PI chain; otherwise (default landing) aggregate recent across all Terra
+      // Classic Cosmos PI chains so the home feed stays Terra-Classic-focused.
       const chainFilterName = originChainFilter || destinationChainFilter;
-      const filteredCosmosPiChain =
-        !hasInput && chainFilterName
-          ? cosmosPiChains.find((c) => c.name === chainFilterName)
-          : undefined;
-
-      if (filteredCosmosPiChain) {
-        logger.debug('Fetching recent Cosmos PI messages for chain:', filteredCosmosPiChain.name);
-        try {
-          const messages = await timeout(
-            fetchMessagesFromPiCosmosChain(
-              filteredCosmosPiChain,
-              { input: 'recent' },
-              multiProvider,
-              registry,
+      if (!hasInput) {
+        const recentChains = chainFilterName
+          ? cosmosPiChains.filter((c) => c.name === chainFilterName)
+          : cosmosPiChains;
+        if (!recentChains.length) return [];
+        logger.debug(
+          'Fetching recent Cosmos PI messages for chains:',
+          recentChains.map((c) => c.name).join(', '),
+        );
+        const settled = await Promise.allSettled(
+          recentChains.map((c) =>
+            timeout(
+              fetchMessagesFromPiCosmosChain(c, { input: 'recent' }, multiProvider, registry),
+              MESSAGE_SEARCH_TIMEOUT,
+              'cosmos pi recent timeout',
             ),
-            MESSAGE_SEARCH_TIMEOUT,
-            'cosmos pi recent timeout',
-          );
-          return messages;
-        } catch {
-          return [];
-        }
+          ),
+        );
+        return settled
+          .filter((r): r is PromiseFulfilledResult<Message[]> => r.status === 'fulfilled')
+          .map((r) => r.value)
+          .flat();
       }
 
-      if (!hasInput || !isValidInput) return [];
+      if (!isValidInput) return [];
       logger.debug('Starting PI Chain message search for:', sanitizedInput);
       const query = { input: ensure0x(sanitizedInput) };
 
