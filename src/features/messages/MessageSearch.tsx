@@ -19,7 +19,7 @@ import {
   useStore,
   useWarpRouteIdToAddressesMap,
 } from '../../metadataStore';
-import { MessageStatusFilter } from '../../types';
+import { MessageStatus, MessageStatusFilter } from '../../types';
 import { logger } from '../../utils/logger';
 import { tryToDecimalNumber } from '../../utils/number';
 import { useMultipleQueryParams, useSyncQueryParam } from '../../utils/queryParams';
@@ -219,7 +219,14 @@ export function MessageSearch() {
 
   useEffect(() => {
     setPiSearchState(DEFAULT_PI_MESSAGE_SEARCH_STATE);
-  }, [sanitizedInput, startTimeFilter, endTimeFilter, originChainFilter, destinationChainFilter]);
+  }, [
+    sanitizedInput,
+    startTimeFilter,
+    endTimeFilter,
+    originChainFilter,
+    destinationChainFilter,
+    statusFilter,
+  ]);
 
   const prevShouldRunPiSearchRef = useRef(shouldRunPiSearch);
   useEffect(() => {
@@ -246,18 +253,49 @@ export function MessageSearch() {
     return ids;
   }, [chainMetadataMap]);
 
+  // Resolve the active chain filters to domain ids so PI (Cosmos) results — which are fetched
+  // as recent TC dispatches and not pre-filtered by chain — respect the selected origin/dest.
+  // GraphQL results are already filtered server-side, so re-applying here is a no-op for them.
+  const originFilterDomainId = useMemo(
+    () => (originChainFilter ? (chainMetadataMap[originChainFilter]?.domainId ?? null) : null),
+    [originChainFilter, chainMetadataMap],
+  );
+  const destFilterDomainId = useMemo(
+    () =>
+      destinationChainFilter
+        ? (chainMetadataMap[destinationChainFilter]?.domainId ?? null)
+        : null,
+    [destinationChainFilter, chainMetadataMap],
+  );
+
+  // The time/status filters are applied server-side for GraphQL results, but PI (Cosmos) results
+  // bypass the DB, so apply those filters to them here. Timestamps are epoch ms on both sides
+  // (DatetimeField returns getTime(); message.origin.timestamp is ms).
+  const filteredPiList = useMemo(() => {
+    return (piSearchState.messageList || []).filter((m) => {
+      if (statusFilter === 'delivered' && m.status !== MessageStatus.Delivered) return false;
+      if (statusFilter === 'pending' && m.status !== MessageStatus.Pending) return false;
+      const ts = m.origin?.timestamp ?? 0;
+      if (startTimeFilter != null && ts < startTimeFilter) return false;
+      if (endTimeFilter != null && ts > endTimeFilter) return false;
+      return true;
+    });
+  }, [piSearchState.messageList, statusFilter, startTimeFilter, endTimeFilter]);
+
   const messageListResult = useMemo(() => {
-    const merged = [...(messageList || []), ...(piSearchState.messageList || [])];
+    const merged = [...(messageList || []), ...filteredPiList];
     const seen = new Set<string>();
     return merged
       .filter((m) => tcDomainIds.has(m.originDomainId) || tcDomainIds.has(m.destinationDomainId))
+      .filter((m) => originFilterDomainId == null || m.originDomainId === originFilterDomainId)
+      .filter((m) => destFilterDomainId == null || m.destinationDomainId === destFilterDomainId)
       .filter((m) => {
         if (seen.has(m.msgId)) return false;
         seen.add(m.msgId);
         return true;
       })
       .sort((a, b) => (b.origin?.timestamp ?? 0) - (a.origin?.timestamp ?? 0));
-  }, [messageList, piSearchState.messageList, tcDomainIds]);
+  }, [messageList, filteredPiList, tcDomainIds, originFilterDomainId, destFilterDomainId]);
 
   const isAnyMessageFound = messageListResult.length > 0;
 
@@ -382,13 +420,14 @@ export function MessageSearch() {
       />
       {shouldRunPiSearch && (
         <PiMessageSearchBridge
-          key={`${sanitizedInput}:${startTimeFilter ?? ''}:${endTimeFilter ?? ''}:${originChainFilter ?? ''}:${destinationChainFilter ?? ''}`}
+          key={`${sanitizedInput}:${startTimeFilter ?? ''}:${endTimeFilter ?? ''}:${originChainFilter ?? ''}:${destinationChainFilter ?? ''}:${statusFilter}`}
           sanitizedInput={sanitizedInput}
           startTimeFilter={startTimeFilter}
           endTimeFilter={endTimeFilter}
           onStateChange={setPiSearchState}
           originChainFilter={originChainFilter}
           destinationChainFilter={destinationChainFilter}
+          statusFilter={statusFilter}
         />
       )}
       <Card className="relative mt-4 min-h-[38rem] w-full" padding="">

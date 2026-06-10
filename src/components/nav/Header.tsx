@@ -5,7 +5,7 @@ import Image from 'next/image';
 import Link from 'next/link';
 import { PropsWithChildren, useCallback, useEffect, useRef, useState } from 'react';
 
-import LogoLockup from '../../../public/images/hyperlane-explorer-logo.svg';
+import LogoLockup from '../../../public/images/logo-new.png';
 import { docLinks, links } from '../../consts/links';
 import { Color } from '../../styles/Color';
 import { useScrollThresholdListener } from '../../utils/useScrollListener';
@@ -74,7 +74,7 @@ export function Header({ pathName }: { pathName: string }) {
               animateHeader && 'rotate-[0.01deg] scale-90'
             } transition-all duration-500 ease-in-out`}
           >
-            <Image src={LogoLockup} alt="Hyperlane Explorer" className="h-8 w-auto sm:h-10" />
+            <Image src={LogoLockup} alt="Terra Classic Explorer" className="h-8 w-auto sm:h-10" />
           </div>
         </Link>
         <nav

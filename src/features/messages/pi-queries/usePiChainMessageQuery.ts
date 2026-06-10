@@ -4,16 +4,59 @@ import { ensure0x, timeout } from '@hyperlane-xyz/utils';
 import { useQuery } from '@tanstack/react-query';
 
 import { useMultiProviderVersion, useReadyMultiProvider, useRegistry } from '../../../store';
-import { Message } from '../../../types';
+import { Message, MessageStatus, MessageStatusFilter } from '../../../types';
 import { logger } from '../../../utils/logger';
+import { getMailboxAddress, isEvmChain, isPiChain } from '../../chains/utils';
 import { useScrapedDomains } from '../../chains/queries/useScrapedChains';
-import { isEvmChain, isPiChain } from '../../chains/utils';
+import { checkIsMessageDelivered } from '../deliveryUtils';
 import type { ExplorerMultiProvider as MultiProtocolProvider } from '../../hyperlane/sdkRuntime';
 import { isValidSearchQuery } from '../queries/useMessageQuery';
 import { PiMessageQuery, PiQueryType, fetchMessagesFromPiChain } from './fetchPiChainMessages';
 import { fetchMessagesFromPiCosmosChain } from './fetchPiCosmosChainMessages';
 
 const MESSAGE_SEARCH_TIMEOUT = 10_000; // 10s
+// Cap concurrent destination-mailbox delivery checks so a large recent feed doesn't fan out
+// into a burst of RPC calls.
+const DELIVERY_CHECK_CONCURRENCY = 8;
+
+// PI Cosmos dispatches are returned with MessageStatus.Unknown (the Cosmos fetch can't tell
+// whether the message was delivered). When the user filters by delivery status, resolve each
+// message's real status by checking the destination chain's mailbox, mirroring the message
+// details page. Skipped when statusFilter is 'all' to avoid adding RPC latency to the feed.
+async function enrichWithDeliveryStatus(
+  messages: Message[],
+  multiProvider: MultiProtocolProvider,
+  registry: IRegistry,
+): Promise<Message[]> {
+  const result = messages.slice();
+  for (let i = 0; i < result.length; i += DELIVERY_CHECK_CONCURRENCY) {
+    const batch = result.slice(i, i + DELIVERY_CHECK_CONCURRENCY);
+    const statuses = await Promise.all(
+      batch.map(async (m) => {
+        try {
+          const destName = multiProvider.tryGetChainName(m.destinationDomainId);
+          if (!destName) return m.status;
+          const mailboxAddr = await getMailboxAddress(destName, {}, registry);
+          if (!mailboxAddr) return m.status;
+          const { isDelivered } = await checkIsMessageDelivered(
+            m.msgId,
+            m.destinationDomainId,
+            mailboxAddr,
+            multiProvider,
+          );
+          return isDelivered ? MessageStatus.Delivered : MessageStatus.Pending;
+        } catch (e) {
+          logger.debug('Delivery status enrichment failed for', m.msgId, e);
+          return m.status;
+        }
+      }),
+    );
+    statuses.forEach((status, j) => {
+      result[i + j] = { ...result[i + j], status };
+    });
+  }
+  return result;
+}
 
 // Query 'Permissionless Interoperability (PI)' chains using
 // override chain metadata in store state
@@ -25,6 +68,7 @@ export function usePiChainMessageSearchQuery({
   pause,
   originChainFilter,
   destinationChainFilter,
+  statusFilter = 'all',
 }: {
   sanitizedInput: string;
   startTimeFilter?: number | null;
@@ -33,6 +77,7 @@ export function usePiChainMessageSearchQuery({
   pause: boolean;
   originChainFilter?: string | null;
   destinationChainFilter?: string | null;
+  statusFilter?: MessageStatusFilter;
 }) {
   const { scrapedDomains: scrapedChains } = useScrapedDomains();
   const multiProvider = useReadyMultiProvider();
@@ -50,6 +95,7 @@ export function usePiChainMessageSearchQuery({
       pause,
       originChainFilter,
       destinationChainFilter,
+      statusFilter,
     ],
     queryFn: async () => {
       if (pause || !multiProvider) return [];
@@ -65,12 +111,17 @@ export function usePiChainMessageSearchQuery({
           isPiChain(multiProvider, scrapedChains, c.domainId),
       );
 
-      // No search text → show recent dispatches. With a chain filter, limit to that
-      // Cosmos PI chain; otherwise (default landing) aggregate recent across all Terra
-      // Classic Cosmos PI chains so the home feed stays Terra-Classic-focused.
+      // No search text → show recent dispatches. If the filter names a Cosmos PI chain
+      // (i.e. Terra Classic itself), read just that chain. If it names a non-TC counterpart
+      // (e.g. a TC<->Sepolia route's Sepolia side), Hasura has no TC-origin rows, so read
+      // recent dispatches from all TC Cosmos chains and let the caller narrow by domain —
+      // this is what surfaces the TC->counterpart direction. With no filter (landing) we also
+      // aggregate across all TC Cosmos chains.
       const chainFilterName = originChainFilter || destinationChainFilter;
       if (!hasInput) {
-        const recentChains = chainFilterName
+        const filterIsCosmosPiChain =
+          !!chainFilterName && cosmosPiChains.some((c) => c.name === chainFilterName);
+        const recentChains = filterIsCosmosPiChain
           ? cosmosPiChains.filter((c) => c.name === chainFilterName)
           : cosmosPiChains;
         if (!recentChains.length) return [];
@@ -87,10 +138,12 @@ export function usePiChainMessageSearchQuery({
             ),
           ),
         );
-        return settled
+        const recentMessages = settled
           .filter((r): r is PromiseFulfilledResult<Message[]> => r.status === 'fulfilled')
           .map((r) => r.value)
           .flat();
+        if (statusFilter === 'all') return recentMessages;
+        return enrichWithDeliveryStatus(recentMessages, multiProvider, registry);
       }
 
       if (!isValidInput) return [];
