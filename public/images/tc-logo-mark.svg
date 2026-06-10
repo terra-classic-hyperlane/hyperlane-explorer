@@ -1,12 +1,12 @@
 <svg width="64" height="64" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" role="img" aria-label="Terra Classic">
   <defs>
     <linearGradient id="tcOrbA" x1="4" y1="8" x2="60" y2="56" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#5FE3EF" />
-      <stop offset="1" stop-color="#5B8BFF" />
+      <stop stop-color="#C9A0FF" />
+      <stop offset="1" stop-color="#8B5CF6" />
     </linearGradient>
     <linearGradient id="tcOrbB" x1="60" y1="8" x2="4" y2="56" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#7C5CFF" />
-      <stop offset="1" stop-color="#3FD0E6" />
+      <stop stop-color="#F08CF0" />
+      <stop offset="1" stop-color="#A855F7" />
     </linearGradient>
     <filter id="tcGlow" x="-40%" y="-40%" width="180%" height="180%">
       <feGaussianBlur stdDeviation="1.4" result="b" />
@@ -32,10 +32,10 @@
 
   <!-- connected chain nodes on the orbits -->
   <g filter="url(#tcGlow)">
-    <circle cx="8.7" cy="17.4" r="3.1" fill="#5FE3EF" />
-    <circle cx="55.3" cy="46.6" r="3.1" fill="#5B8BFF" />
-    <circle cx="8.7" cy="46.6" r="3.1" fill="#7C5CFF" />
-    <circle cx="55.3" cy="17.4" r="3.1" fill="#3FD0E6" />
+    <circle cx="8.7" cy="17.4" r="3.1" fill="#C9A0FF" />
+    <circle cx="55.3" cy="46.6" r="3.1" fill="#A855F7" />
+    <circle cx="8.7" cy="46.6" r="3.1" fill="#F08CF0" />
+    <circle cx="55.3" cy="17.4" r="3.1" fill="#D8B4FE" />
   </g>
 
   <!-- Terra Classic brand mark at the core -->
