@@ -5,7 +5,7 @@ import Image from 'next/image';
 import Link from 'next/link';
 import { PropsWithChildren, useCallback, useEffect, useRef, useState } from 'react';
 
-import LogoLockup from '../../../public/images/hyperlane-explorer-logo.svg';
+import LogoMark from '../../../public/images/tc-logo-mark.svg';
 import { docLinks, links } from '../../consts/links';
 import { Color } from '../../styles/Color';
 import { useScrollThresholdListener } from '../../utils/useScrollListener';
@@ -61,20 +61,42 @@ export function Header({ pathName }: { pathName: string }) {
 
   return (
     <header
-      className={`sticky top-0 z-20 w-full bg-black/10 px-2 backdrop-blur-md transition-all duration-200 ease-in-out sm:px-6 lg:px-12 ${
-        animateHeader ? 'py-1' : 'py-4 sm:py-5'
+      className={`sticky top-0 z-20 w-full border-b border-white/5 bg-black/10 px-2 backdrop-blur-md transition-all duration-200 ease-in-out sm:px-6 lg:px-12 ${
+        animateHeader ? 'py-1.5' : 'py-3 sm:py-4'
       }`}
     >
       <div className="flex items-center justify-between">
-        <Link href="/" className="flex items-center">
-          {/* Add a minimal rotation here to trick the browser to go into hardware acceleration mode
-            this will make the animation a little smoother, specially for Firefox*/}
-          <div
-            className={`flex items-center ${
-              animateHeader && 'rotate-[0.01deg] scale-90'
-            } transition-all duration-500 ease-in-out`}
-          >
-            <Image src={LogoLockup} alt="Hyperlane Explorer" className="h-8 w-auto sm:h-10" />
+        <Link
+          href="/"
+          className="group flex items-center gap-2.5 sm:gap-3"
+          aria-label="Terra Classic Bridge Explorer"
+        >
+          {/* Emblem: interchain orbits (bridge) around a golden Luna core. The tiny rotation nudges
+            the browser into hardware-accelerated compositing for a smoother scroll animation. */}
+          <Image
+            src={LogoMark}
+            alt=""
+            priority
+            className={clsx(
+              'w-auto transition-all duration-500 ease-in-out group-hover:scale-105',
+              animateHeader ? 'h-8 rotate-[0.01deg] sm:h-9' : 'h-10 sm:h-12',
+            )}
+          />
+          <div className="flex flex-col leading-none">
+            <span
+              className={clsx(
+                'font-bold tracking-tight transition-all duration-500 ease-in-out',
+                animateHeader ? 'text-lg sm:text-xl' : 'text-xl sm:text-[1.7rem]',
+              )}
+            >
+              <span className="text-white">Terra </span>
+              <span className="bg-gradient-to-r from-[#5fe3ef] to-[#5b8bff] bg-clip-text text-transparent">
+                Classic
+              </span>
+            </span>
+            <span className="mt-1 hidden text-[0.6rem] font-semibold uppercase tracking-[0.32em] text-[#9fb4dd] xs:block sm:text-[0.66rem]">
+              Bridge Explorer
+            </span>
           </div>
         </Link>
         <nav

@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 
+import { MessageStatusFilter } from '../../types';
 import { usePiChainMessageSearchQuery } from './pi-queries/usePiChainMessageQuery';
 import { PiMessageSearchState } from './piSearchState';
 
@@ -10,6 +11,7 @@ export function PiMessageSearchBridge({
   startTimeFilter,
   originChainFilter,
   destinationChainFilter,
+  statusFilter,
 }: {
   endTimeFilter: number | null;
   onStateChange: (state: PiMessageSearchState) => void;
@@ -17,6 +19,7 @@ export function PiMessageSearchBridge({
   startTimeFilter: number | null;
   originChainFilter?: string | null;
   destinationChainFilter?: string | null;
+  statusFilter?: MessageStatusFilter;
 }) {
   const { hasRun, isError, isFetching, isMessagesFound, messageList } =
     usePiChainMessageSearchQuery({
@@ -26,6 +29,7 @@ export function PiMessageSearchBridge({
       pause: false,
       originChainFilter,
       destinationChainFilter,
+      statusFilter,
     });
 
   useEffect(() => {

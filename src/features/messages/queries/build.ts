@@ -76,6 +76,12 @@ export function buildMessageSearchQuery(
   statusFilter: MessageStatusFilter = 'all',
   warpRouteAddresses: string[] = [],
   isPendingFilter = false,
+  // Domain ids of the Terra Classic chains. This explorer only surfaces TC-involved messages,
+  // so when one side is filtered to a non-TC chain the OTHER side must be constrained to TC at
+  // the DB level — otherwise the limited result window is dominated by unrelated traffic (e.g.
+  // recent Ethereum-origin messages all go to Base/Arbitrum) and the client-side TC filter in
+  // MessageSearch.tsx empties everything.
+  tcDomainIds: number[] = [],
 ) {
   const originChains = originDomainIdFilter ? [originDomainIdFilter] : undefined;
   const destinationChains = destDomainIdFilter ? [destDomainIdFilter] : undefined;
@@ -86,6 +92,35 @@ export function buildMessageSearchQuery(
   const warpAddressesBytea = warpRouteAddresses
     .map((addr) => searchValueToPostgresBytea(addr))
     .filter((addr): addr is string => !!addr);
+
+  const hasTc = tcDomainIds.length > 0;
+  const originIsTc = originDomainIdFilter != null && tcDomainIds.includes(originDomainIdFilter);
+  const destIsTc = destDomainIdFilter != null && tcDomainIds.includes(destDomainIdFilter);
+
+  const hasFilters = !!(
+    originDomainIdFilter ||
+    destDomainIdFilter ||
+    startTimeFilter ||
+    endTimeFilter ||
+    searchInput ||
+    statusFilter !== 'all' ||
+    warpAddressesBytea.length > 0 ||
+    isPendingFilter
+  );
+
+  // Decide where the $tcChains variable is needed. The explorer only surfaces TC-involved
+  // messages, so constrain the unpinned side to TC when the opposite side is a non-TC chain,
+  // or require TC involvement when nothing is pinned but other filters are active.
+  // Each "constrain X to TC" only fires when X itself is unpinned — buildDomainIdWhereClause
+  // ignores the TC fallback once a side has an explicit domain filter, so emitting $tcChains
+  // when both sides are pinned would declare a variable the query never uses (Hasura rejects it).
+  const constrainOriginToTc =
+    hasTc && !originDomainIdFilter && !!destDomainIdFilter && !destIsTc;
+  const constrainDestToTc = hasTc && !destDomainIdFilter && !!originDomainIdFilter && !originIsTc;
+  const requireTcInvolvement = hasTc && !originDomainIdFilter && !destDomainIdFilter && hasFilters;
+  // Hasura rejects passing a variable value that the query body never references
+  // ("unexpected variables in variableValues"), so only declare/provide $tcChains when used.
+  const usesTcChains = constrainOriginToTc || constrainDestToTc || requireTcInvolvement;
 
   const variables: Record<string, unknown> = {
     search: searchValueToPostgresBytea(searchInput),
@@ -100,29 +135,29 @@ export function buildMessageSearchQuery(
     variables.warpAddresses = warpAddressesBytea;
   }
 
-  const hasFilters = !!(
-    originDomainIdFilter ||
-    destDomainIdFilter ||
-    startTimeFilter ||
-    endTimeFilter ||
-    searchInput ||
-    statusFilter !== 'all' ||
-    warpAddressesBytea.length > 0 ||
-    isPendingFilter
-  );
+  if (usesTcChains) {
+    variables.tcChains = tcDomainIds;
+  }
+
   const whereClauses = buildSearchWhereClauses(searchInput);
   const originDomainWhereClause = buildDomainIdWhereClause(
     originDomainIdFilter,
     hasFilters,
     'origin',
     mainnetDomainIds,
+    constrainOriginToTc,
   );
   const destinationDomainWhereClause = buildDomainIdWhereClause(
     destDomainIdFilter,
     hasFilters,
     'destination',
     mainnetDomainIds,
+    constrainDestToTc,
   );
+
+  const tcInvolvementClause = requireTcInvolvement
+    ? '{_or: [{origin_domain_id: {_in: $tcChains}}, {destination_domain_id: {_in: $tcChains}}]},'
+    : '';
 
   // Build status filter clause
   const statusWhereClause = buildStatusWhereClause(statusFilter);
@@ -139,6 +174,7 @@ export function buildMessageSearchQuery(
       _and: [
         ${originDomainWhereClause}
         ${destinationDomainWhereClause}
+        ${tcInvolvementClause}
         ${startTimeFilter ? '{send_occurred_at: {_gte: $startTime}},' : ''}
         ${endTimeFilter ? '{send_occurred_at: {_lte: $endTime}},' : ''}
         ${statusWhereClause}
@@ -163,6 +199,9 @@ export function buildMessageSearchQuery(
   ];
   if (warpAddressesBytea.length > 0) {
     variableDeclarations.push('$warpAddresses: [bytea!]');
+  }
+  if (usesTcChains) {
+    variableDeclarations.push('$tcChains: [Int!]');
   }
 
   const query = `query (${variableDeclarations.join(', ')}) @cached(ttl: 5) {
@@ -211,12 +250,18 @@ function buildDomainIdWhereClause(
   hasFilters: boolean,
   fieldName: 'origin' | 'destination',
   mainnetDomainIds: number[] = [],
+  // When true, constrain this side to the Terra Classic domains via the $tcChains variable.
+  // Used when the opposite side is pinned to a non-TC chain so only TC routes are returned.
+  constrainToTc = false,
 ) {
-  // if no filters are set, filter by mainnet chains to not display testnest messages for vanilla query
-  if (!hasFilters) return `{${fieldName}_domain_id: {_in: [${mainnetDomainIds}]}},`;
-
   // if the domainId is set, filter by this domainId instead of mainnet domains
   if (domainId) return `{${fieldName}_domain_id: {_in: $${fieldName}Chains}},`;
+
+  // opposite side pinned to a non-TC chain: this side must be a TC domain
+  if (constrainToTc) return `{${fieldName}_domain_id: {_in: $tcChains}},`;
+
+  // if no filters are set, filter by mainnet chains to not display testnest messages for vanilla query
+  if (!hasFilters) return `{${fieldName}_domain_id: {_in: [${mainnetDomainIds}]}},`;
 
   // if domainId is not set but there are other filters, remove condition of filtering by mainnet chains
   return '';

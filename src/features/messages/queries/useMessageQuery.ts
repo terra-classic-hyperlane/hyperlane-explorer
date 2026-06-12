@@ -1,7 +1,7 @@
 import { useCallback, useMemo } from 'react';
 import { useQuery } from 'urql';
 
-import { useChainMetadataResolver } from '../../../metadataStore';
+import { useChainMetadataMap, useChainMetadataResolver } from '../../../metadataStore';
 import { MessageStatus, MessageStatusFilter } from '../../../types';
 import { useVisibleInterval } from '../../../utils/useVisibleInterval';
 import { useScrapedChains, useScrapedDomains } from '../../chains/queries/useScrapedChains';
@@ -39,6 +39,18 @@ export function useMessageSearchQuery(
   const mainnetDomainIds = Object.values(chains)
     .filter((chain) => !chain.isTestnet)
     .map((chain) => chain.domainId);
+
+  // Domain ids of the Terra Classic chains (v2 mainnet 132556 + the v1 deploy that shares the
+  // terraclassictestnet domain 1325). This explorer only surfaces TC-involved messages, so these
+  // are passed to the query builder to constrain results to TC routes at the DB level.
+  const chainMetadataMap = useChainMetadataMap();
+  const tcDomainIds = useMemo(
+    () =>
+      Object.values(chainMetadataMap)
+        .filter((c) => c?.name?.startsWith('terraclassic') && typeof c.domainId === 'number')
+        .map((c) => c.domainId),
+    [chainMetadataMap],
+  );
 
   const hasInput = !!sanitizedInput;
   const isValidInput = !hasInput || isValidSearchQuery(sanitizedInput);
@@ -79,6 +91,7 @@ export function useMessageSearchQuery(
     dbStatusFilter,
     warpAddresses,
     isPendingFilter,
+    tcDomainIds,
   );
 
   // Execute query
