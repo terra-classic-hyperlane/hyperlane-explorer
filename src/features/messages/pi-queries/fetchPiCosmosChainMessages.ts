@@ -1,6 +1,6 @@
-import { IRegistry } from '@hyperlane-xyz/registry';
-import { ChainMetadata } from '@hyperlane-xyz/sdk';
-import type { ExplorerMultiProvider as MultiProtocolProvider } from '../../hyperlane/sdkRuntime';
+import { IRegistry } from "@hyperlane-xyz/registry";
+import { ChainMetadata } from "@hyperlane-xyz/sdk";
+import type { ExplorerMultiProvider as MultiProtocolProvider } from "../../hyperlane/sdkRuntime";
 import {
   ProtocolType,
   bytesToAddressCosmos,
@@ -10,16 +10,16 @@ import {
   normalizeAddress,
   parseMessage,
   strip0x,
-} from '@hyperlane-xyz/utils';
+} from "@hyperlane-xyz/utils";
 
-import { Message, MessageStatus } from '../../../types';
-import { logger } from '../../../utils/logger';
+import { Message, MessageStatus } from "../../../types";
+import { logger } from "../../../utils/logger";
 
 const COSMOS_PI_TX_LIMIT = 20;
 
 // Use a server-side proxy for Terra Classic RPC calls to bypass browser CORS restrictions.
 // The proxy route at /api/terra-cosmos-rpc forwards requests server-side.
-const TC_RPC_PROXY = '/api/terra-cosmos-rpc';
+const TC_RPC_PROXY = "/api/terra-cosmos-rpc";
 
 // Helper: call RPC via the server-side proxy (avoids CORS). The proxy resolves the
 // RPC node list from the registry by chain name, so endpoints stay registry-driven
@@ -30,9 +30,9 @@ async function rpcViaProxy(
   chainName: string,
 ): Promise<unknown> {
   const res = await fetch(TC_RPC_PROXY, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params, chainName }),
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params, chainName }),
   });
   if (!res.ok) throw new Error(`proxy error ${res.status}`);
   return res.json();
@@ -58,20 +58,61 @@ interface CosmosTxSearchResult {
 
 function attrsToMap(attrs: CosmosAttr[]): Record<string, string> {
   const out: Record<string, string> = {};
-  for (const a of attrs) out[a.key] = a.value ?? '';
+  for (const a of attrs) out[a.key] = a.value ?? "";
   return out;
 }
 
-async function fetchBlockTimestamp(chainName: string, height: string): Promise<number | undefined> {
+async function fetchBlockTimestamp(
+  chainName: string,
+  height: string,
+): Promise<number | undefined> {
   try {
     // Use proxy to avoid CORS
-    const data = await rpcViaProxy('block', { height }, chainName) as { result?: { block?: { header?: { time?: string } } } };
+    const data = (await rpcViaProxy("block", { height }, chainName)) as {
+      result?: { block?: { header?: { time?: string } } };
+    };
     const timeStr = data?.result?.block?.header?.time;
     if (timeStr) return new Date(timeStr).getTime();
   } catch (e) {
-    logger.debug('Failed to fetch block timestamp for height', height, e);
+    logger.debug("Failed to fetch block timestamp for height", height, e);
   }
   return undefined;
+}
+
+interface LcdTxResponse {
+  txhash: string;
+  height: string;
+  timestamp: string;
+  logs: Array<{ events: CosmosEvent[] }>;
+}
+
+// Search txs on the LCD. Newer Cosmos SDK nodes (0.50+, incl. Terra Classic) take the
+// filter as `query=` and reject `events=` with "query cannot be empty"; older ones only
+// know `events=`. Try each configured LCD with both forms, first hit wins.
+async function lcdTxSearch(
+  chainMetadata: ChainMetadata,
+  eventFilter: string,
+  limit: number,
+): Promise<LcdTxResponse[]> {
+  const lcdUrls = (chainMetadata.restUrls || [])
+    .map((u) => u.http)
+    .filter(Boolean);
+  const encoded = encodeURIComponent(eventFilter);
+  for (const lcdUrl of lcdUrls) {
+    for (const param of ["query", "events"]) {
+      try {
+        const url = `${lcdUrl}/cosmos/tx/v1beta1/txs?${param}=${encoded}&limit=${limit}&order_by=ORDER_BY_DESC`;
+        const res = await fetch(url);
+        if (!res.ok) continue;
+        const data = await res.json();
+        const txs: LcdTxResponse[] = data?.tx_responses || [];
+        if (txs.length) return txs;
+      } catch (e) {
+        logger.debug("Cosmos LCD tx search failed", lcdUrl, param, e);
+      }
+    }
+  }
+  return [];
 }
 
 async function resolveMailboxBech32(
@@ -79,13 +120,14 @@ async function resolveMailboxBech32(
   registry: IRegistry,
 ): Promise<string | undefined> {
   const mailboxHex =
-    chainMetadata.mailbox || (await registry.getChainAddresses(chainMetadata.name))?.mailbox;
+    chainMetadata.mailbox ||
+    (await registry.getChainAddresses(chainMetadata.name))?.mailbox;
   if (!mailboxHex || !chainMetadata.bech32Prefix) return undefined;
   try {
-    const bytes = Buffer.from(mailboxHex.replace(/^0x/, ''), 'hex');
+    const bytes = Buffer.from(mailboxHex.replace(/^0x/, ""), "hex");
     return bytesToAddressCosmos(bytes, chainMetadata.bech32Prefix);
   } catch (e) {
-    logger.debug('Failed to convert mailbox bytes32 to bech32', e);
+    logger.debug("Failed to convert mailbox bytes32 to bech32", e);
     return undefined;
   }
 }
@@ -98,18 +140,18 @@ function eventsToMessage(
   chainMetadata: ChainMetadata<{ mailbox?: string }>,
   multiProvider: MultiProtocolProvider,
 ): Message | null {
-  const dispatchEv = events.find((e) => e.type === 'wasm-mailbox_dispatch');
+  const dispatchEv = events.find((e) => e.type === "wasm-mailbox_dispatch");
   if (!dispatchEv) return null;
 
   const attrs = attrsToMap(dispatchEv.attributes);
-  const messageHex = attrs['message'];
+  const messageHex = attrs["message"];
   if (!messageHex) return null;
 
   // Extract IGP gas payment data from wasm-igp-core-pay-for-gas event (if present)
-  const igpEv = events.find((e) => e.type === 'wasm-igp-core-pay-for-gas');
+  const igpEv = events.find((e) => e.type === "wasm-igp-core-pay-for-gas");
   const igpAttrs = igpEv ? attrsToMap(igpEv.attributes) : {};
-  const igpPayment = igpAttrs['payment'];
-  const igpGasAmount = igpAttrs['gas_amount'];
+  const igpPayment = igpAttrs["payment"];
+  const igpGasAmount = igpAttrs["gas_amount"];
 
   try {
     const msgBytes = ensure0x(messageHex);
@@ -122,21 +164,27 @@ function eventsToMessage(
     // computed from the unmodified message bytes, so search-by-id still matches.
     // tryGetChainId never throws (unlike getChainId), avoiding silent message drops.
     const originChainId =
-      chainMetadata.chainId ?? multiProvider.tryGetChainId(parsed.origin) ?? parsed.origin;
+      chainMetadata.chainId ??
+      multiProvider.tryGetChainId(parsed.origin) ??
+      parsed.origin;
     const originDomainId = chainMetadata.domainId ?? parsed.origin;
     const destinationChainId =
       multiProvider.tryGetChainId(parsed.destination) || parsed.destination;
 
     // Convert to protocol-native address format so lookups against the warp route registry match:
     // cosmos → bech32 (terra1...), EVM → checksum hex (0xA687...), Sealevel → base58
-    const senderBytes = Uint8Array.from(Buffer.from(strip0x(ensure0x(parsed.sender)), 'hex'));
+    const senderBytes = Uint8Array.from(
+      Buffer.from(strip0x(ensure0x(parsed.sender)), "hex"),
+    );
     const sender = bytesToProtocolAddress(
       senderBytes,
       chainMetadata.protocol as ProtocolType,
       chainMetadata.bech32Prefix,
     );
     const destMetadata = multiProvider.tryGetChainMetadata(parsed.destination);
-    const recipientBytes = Uint8Array.from(Buffer.from(strip0x(ensure0x(parsed.recipient)), 'hex'));
+    const recipientBytes = Uint8Array.from(
+      Buffer.from(strip0x(ensure0x(parsed.recipient)), "hex"),
+    );
     const recipient = destMetadata
       ? bytesToProtocolAddress(
           recipientBytes,
@@ -144,10 +192,11 @@ function eventsToMessage(
           destMetadata.bech32Prefix,
         )
       : normalizeAddress(ensure0x(parsed.recipient));
-    const mailboxAddr = chainMetadata.mailbox || attrs['_contract_address'] || '';
+    const mailboxAddr =
+      chainMetadata.mailbox || attrs["_contract_address"] || "";
 
     return {
-      id: '',
+      id: "",
       msgId,
       sender,
       recipient,
@@ -159,14 +208,14 @@ function eventsToMessage(
       destinationDomainId: parsed.destination,
       body: parsed.body,
       numPayments: igpPayment ? 1 : 0,
-      totalPayment: igpPayment || '0',
-      totalGasAmount: igpGasAmount || '0',
+      totalPayment: igpPayment || "0",
+      totalGasAmount: igpGasAmount || "0",
       origin: {
         timestamp: timestamp || 0,
         hash: txHash,
         from: sender,
         to: mailboxAddr,
-        blockHash: '',
+        blockHash: "",
         blockNumber: parseInt(height, 10),
         mailbox: mailboxAddr,
         nonce: 0,
@@ -181,7 +230,7 @@ function eventsToMessage(
       isPiMsg: true,
     };
   } catch (e) {
-    logger.debug('Failed to parse Cosmos mailbox dispatch message', e);
+    logger.debug("Failed to parse Cosmos mailbox dispatch message", e);
     return null;
   }
 }
@@ -195,7 +244,7 @@ async function searchByTxHash(
   // Use LCD REST for tx lookup — the Tendermint RPC `tx` method can hash differently
   const lcdUrl = chainMetadata.restUrls?.[0]?.http;
   if (!lcdUrl) return [];
-  const hash = txHash.replace(/^0x/, '').toUpperCase();
+  const hash = txHash.replace(/^0x/, "").toUpperCase();
   try {
     const res = await fetch(`${lcdUrl}/cosmos/tx/v1beta1/txs/${hash}`);
     if (!res.ok) return [];
@@ -208,11 +257,20 @@ async function searchByTxHash(
     for (const log of resp.logs || []) {
       allEvents.push(...(log.events || []));
     }
-    const timestamp = resp.timestamp ? new Date(resp.timestamp).getTime() : undefined;
-    const msg = eventsToMessage(allEvents, resp.txhash, resp.height, timestamp, chainMetadata, multiProvider);
+    const timestamp = resp.timestamp
+      ? new Date(resp.timestamp).getTime()
+      : undefined;
+    const msg = eventsToMessage(
+      allEvents,
+      resp.txhash,
+      resp.height,
+      timestamp,
+      chainMetadata,
+      multiProvider,
+    );
     return msg ? [msg] : [];
   } catch (e) {
-    logger.debug('Cosmos tx LCD lookup failed', e);
+    logger.debug("Cosmos tx LCD lookup failed", e);
     return [];
   }
 }
@@ -224,51 +282,60 @@ async function searchByMsgId(
   multiProvider: MultiProtocolProvider,
   chainMetadata: ChainMetadata<{ mailbox?: string }>,
 ): Promise<Message[]> {
-  const normalizedId = searchMsgId.replace(/^0x/, '').toLowerCase();
+  const normalizedId = searchMsgId.replace(/^0x/, "").toLowerCase();
 
   // Try LCD first (CORS-friendly): search recent txs and look for msgId in events
-  const lcdUrl = chainMetadata.restUrls?.[0]?.http;
-  if (lcdUrl) {
-    try {
-      const event = encodeURIComponent(`execute._contract_address='${mailboxBech32}'`);
-      const url = `${lcdUrl}/cosmos/tx/v1beta1/txs?events=${event}&limit=50&order_by=ORDER_BY_DESC`;
-      const res = await fetch(url);
-      if (res.ok) {
-        const data = await res.json();
-        for (const tx of data?.tx_responses || []) {
-          const allEvents: CosmosEvent[] = [];
-          for (const log of tx.logs || []) allEvents.push(...(log.events || []));
-          const idEv = allEvents.find((e) => e.type === 'wasm-mailbox_dispatch_id');
-          if (!idEv) continue;
-          const mid = (attrsToMap(idEv.attributes)['message_id'] || '').replace(/^0x/, '').toLowerCase();
-          if (mid === normalizedId) {
-            const timestamp = tx.timestamp ? new Date(tx.timestamp).getTime() : undefined;
-            const msg = eventsToMessage(allEvents, tx.txhash, tx.height, timestamp, chainMetadata, multiProvider);
-            if (msg) return [msg];
-          }
-        }
-      }
-    } catch (e) {
-      logger.debug('Cosmos LCD msgId search failed', e);
+  const lcdTxs = await lcdTxSearch(
+    chainMetadata,
+    `execute._contract_address='${mailboxBech32}'`,
+    50,
+  );
+  for (const tx of lcdTxs) {
+    const allEvents: CosmosEvent[] = [];
+    for (const log of tx.logs || []) allEvents.push(...(log.events || []));
+    const idEv = allEvents.find((e) => e.type === "wasm-mailbox_dispatch_id");
+    if (!idEv) continue;
+    const mid = (attrsToMap(idEv.attributes)["message_id"] || "")
+      .replace(/^0x/, "")
+      .toLowerCase();
+    if (mid === normalizedId) {
+      const timestamp = tx.timestamp
+        ? new Date(tx.timestamp).getTime()
+        : undefined;
+      const msg = eventsToMessage(
+        allEvents,
+        tx.txhash,
+        tx.height,
+        timestamp,
+        chainMetadata,
+        multiProvider,
+      );
+      if (msg) return [msg];
     }
   }
 
   // Fallback: RPC tx_search via server-side proxy (no CORS issue)
   try {
     const chainName = chainMetadata.name;
-    const data = await rpcViaProxy('tx_search', {
-      query: `execute._contract_address='${mailboxBech32}'`,
-      order_by: 'desc',
-      per_page: String(COSMOS_PI_TX_LIMIT),
-      page: '1',
-    }, chainName) as { result?: { txs?: CosmosTxSearchResult[] } };
+    const data = (await rpcViaProxy(
+      "tx_search",
+      {
+        query: `execute._contract_address='${mailboxBech32}'`,
+        order_by: "desc",
+        per_page: String(COSMOS_PI_TX_LIMIT),
+        page: "1",
+      },
+      chainName,
+    )) as { result?: { txs?: CosmosTxSearchResult[] } };
     const txs: CosmosTxSearchResult[] = data?.result?.txs || [];
 
     for (const tx of txs) {
-      const idEv = tx.tx_result.events.find((e) => e.type === 'wasm-mailbox_dispatch_id');
+      const idEv = tx.tx_result.events.find(
+        (e) => e.type === "wasm-mailbox_dispatch_id",
+      );
       if (!idEv) continue;
       const attrs = attrsToMap(idEv.attributes);
-      const mid = (attrs['message_id'] || '').replace(/^0x/, '').toLowerCase();
+      const mid = (attrs["message_id"] || "").replace(/^0x/, "").toLowerCase();
       if (mid === normalizedId) {
         const timestamp = await fetchBlockTimestamp(chainName, tx.height);
         const msg = eventsToMessage(
@@ -283,7 +350,7 @@ async function searchByMsgId(
       }
     }
   } catch (e) {
-    logger.debug('Cosmos RPC msgId search failed', e);
+    logger.debug("Cosmos RPC msgId search failed", e);
   }
   return [];
 }
@@ -291,37 +358,33 @@ async function searchByMsgId(
 // LCD-based tx search — avoids browser CORS restrictions that affect RPC tx_search.
 // Uses the Cosmos REST API: GET /cosmos/tx/v1beta1/txs?events=...
 async function searchRecentViaLcd(
-  lcdUrl: string,
   mailboxBech32: string,
   multiProvider: MultiProtocolProvider,
   chainMetadata: ChainMetadata<{ mailbox?: string }>,
 ): Promise<Message[]> {
-  try {
-    const event = encodeURIComponent(`execute._contract_address='${mailboxBech32}'`);
-    const url = `${lcdUrl}/cosmos/tx/v1beta1/txs?events=${event}&limit=${COSMOS_PI_TX_LIMIT}&order_by=ORDER_BY_DESC`;
-    const res = await fetch(url);
-    if (!res.ok) return [];
-    const data = await res.json();
-    const txResponses: Array<{
-      txhash: string;
-      height: string;
-      timestamp: string;
-      logs: Array<{ events: CosmosEvent[] }>;
-    }> = data?.tx_responses || [];
-
-    const messages: Message[] = [];
-    for (const tx of txResponses) {
-      const allEvents: CosmosEvent[] = [];
-      for (const log of tx.logs || []) allEvents.push(...(log.events || []));
-      const timestamp = tx.timestamp ? new Date(tx.timestamp).getTime() : undefined;
-      const msg = eventsToMessage(allEvents, tx.txhash, tx.height, timestamp, chainMetadata, multiProvider);
-      if (msg) messages.push(msg);
-    }
-    return messages;
-  } catch (e) {
-    logger.debug('Cosmos LCD recent search failed', e);
-    return [];
+  const txResponses = await lcdTxSearch(
+    chainMetadata,
+    `execute._contract_address='${mailboxBech32}'`,
+    COSMOS_PI_TX_LIMIT,
+  );
+  const messages: Message[] = [];
+  for (const tx of txResponses) {
+    const allEvents: CosmosEvent[] = [];
+    for (const log of tx.logs || []) allEvents.push(...(log.events || []));
+    const timestamp = tx.timestamp
+      ? new Date(tx.timestamp).getTime()
+      : undefined;
+    const msg = eventsToMessage(
+      allEvents,
+      tx.txhash,
+      tx.height,
+      timestamp,
+      chainMetadata,
+      multiProvider,
+    );
+    if (msg) messages.push(msg);
   }
+  return messages;
 }
 
 // Also search via RPC as fallback (works server-side / CLI, may be blocked in browser by CORS)
@@ -331,32 +394,46 @@ async function searchRecent(
   multiProvider: MultiProtocolProvider,
   chainMetadata: ChainMetadata<{ mailbox?: string }>,
 ): Promise<Message[]> {
-  // Prefer LCD to avoid CORS issues in browser context
-  const lcdUrl = chainMetadata.restUrls?.[0]?.http;
-  if (lcdUrl) {
-    const lcdResults = await searchRecentViaLcd(lcdUrl, mailboxBech32, multiProvider, chainMetadata);
-    if (lcdResults.length) return lcdResults;
-  }
+  // Prefer LCD to avoid CORS issues in browser context (and it returns tx timestamps)
+  const lcdResults = await searchRecentViaLcd(
+    mailboxBech32,
+    multiProvider,
+    chainMetadata,
+  );
+  if (lcdResults.length) return lcdResults;
 
   // Fallback: RPC tx_search via server-side proxy (no CORS issue)
   try {
     const chainName = chainMetadata.name;
-    const data = await rpcViaProxy('tx_search', {
-      query: `execute._contract_address='${mailboxBech32}'`,
-      order_by: 'desc',
-      per_page: String(COSMOS_PI_TX_LIMIT),
-      page: '1',
-    }, chainName) as { result?: { txs?: CosmosTxSearchResult[] } };
+    const data = (await rpcViaProxy(
+      "tx_search",
+      {
+        query: `execute._contract_address='${mailboxBech32}'`,
+        order_by: "desc",
+        per_page: String(COSMOS_PI_TX_LIMIT),
+        page: "1",
+      },
+      chainName,
+    )) as { result?: { txs?: CosmosTxSearchResult[] } };
     const txs: CosmosTxSearchResult[] = data?.result?.txs || [];
-    const timestamps = await Promise.all(txs.map((tx) => fetchBlockTimestamp(chainName, tx.height)));
+    const timestamps = await Promise.all(
+      txs.map((tx) => fetchBlockTimestamp(chainName, tx.height)),
+    );
     const messages: Message[] = [];
     for (let i = 0; i < txs.length; i++) {
-      const msg = eventsToMessage(txs[i].tx_result.events, txs[i].hash, txs[i].height, timestamps[i], chainMetadata, multiProvider);
+      const msg = eventsToMessage(
+        txs[i].tx_result.events,
+        txs[i].hash,
+        txs[i].height,
+        timestamps[i],
+        chainMetadata,
+        multiProvider,
+      );
       if (msg) messages.push(msg);
     }
     return messages;
   } catch (e) {
-    logger.debug('Cosmos RPC recent search failed', e);
+    logger.debug("Cosmos RPC recent search failed", e);
     return [];
   }
 }
@@ -375,23 +452,38 @@ export async function fetchMessagesFromPiCosmosChain(
   // Single mailbox per chain, sourced from the registry — no hardcoded addresses.
   const mailbox = await resolveMailboxBech32(chainMetadata, registry);
   if (!mailbox) {
-    logger.debug('No mailbox found in registry for Cosmos chain', chainMetadata.name);
+    logger.debug(
+      "No mailbox found in registry for Cosmos chain",
+      chainMetadata.name,
+    );
     return [];
   }
 
-  const input = query.input.replace(/^0x/, '');
-  logger.debug(`Cosmos PI query on ${chainMetadata.name}: "${input.slice(0, 16)}..."`);
+  const input = query.input.replace(/^0x/, "");
+  logger.debug(
+    `Cosmos PI query on ${chainMetadata.name}: "${input.slice(0, 16)}..."`,
+  );
 
   // 64-char hex = tx hash or msg id
   if (/^[0-9a-fA-F]{64}$/.test(input)) {
     // Try tx hash first (doesn't depend on mailbox)
-    const byTxHash = await searchByTxHash(rpcUrl, input, multiProvider, chainMetadata);
+    const byTxHash = await searchByTxHash(
+      rpcUrl,
+      input,
+      multiProvider,
+      chainMetadata,
+    );
     if (byTxHash.length) return byTxHash;
     return searchByMsgId(rpcUrl, mailbox, input, multiProvider, chainMetadata);
   }
 
   // Recent dispatches — sort by block height (desc) and dedupe by msgId
-  const messages = await searchRecent(rpcUrl, mailbox, multiProvider, chainMetadata);
+  const messages = await searchRecent(
+    rpcUrl,
+    mailbox,
+    multiProvider,
+    chainMetadata,
+  );
   const seen = new Set<string>();
   return messages
     .sort((a, b) => (b.origin?.blockNumber ?? 0) - (a.origin?.blockNumber ?? 0))

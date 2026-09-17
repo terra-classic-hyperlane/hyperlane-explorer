@@ -62,9 +62,9 @@ export function useMessageDeliveryStatus({
         toast.error(<MissingChainConfigToast domainId={destinationDomainId} />);
         return { message: messageForQuery };
       }
-      // Allow Cosmos destinations — checkIsMessageDelivered handles them via RPC tx_search
+      // EVM, Cosmos, and Sealevel destinations are all supported by checkIsMessageDelivered.
       const destProtocol = multiProvider.tryGetChainMetadata(destinationDomainId)?.protocol;
-      if (destProtocol !== 'ethereum' && destProtocol !== 'cosmos') {
+      if (destProtocol !== 'ethereum' && destProtocol !== 'cosmos' && destProtocol !== 'sealevel') {
         logger.debug('Skipping delivery status check for unsupported protocol:', destProtocol);
         return { message: messageForQuery };
       }
