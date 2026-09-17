@@ -1,9 +1,9 @@
-import { Mailbox__factory as MailboxFactory } from "@hyperlane-xyz/core";
-import { bytesToAddressCosmos, messageId } from "@hyperlane-xyz/utils";
+import { Mailbox__factory as MailboxFactory } from '@hyperlane-xyz/core';
+import { bytesToAddressCosmos, messageId } from '@hyperlane-xyz/utils';
 
-import { DELIVERY_LOG_CHECK_BLOCK_RANGE } from "../../consts/values";
-import { logger } from "../../utils/logger";
-import type { ExplorerMultiProvider as MultiProtocolProvider } from "../hyperlane/sdkRuntime";
+import { DELIVERY_LOG_CHECK_BLOCK_RANGE } from '../../consts/values';
+import { logger } from '../../utils/logger';
+import type { ExplorerMultiProvider as MultiProtocolProvider } from '../hyperlane/sdkRuntime';
 
 const COSMOS_PROCESS_SEARCH_LIMIT = 50;
 
@@ -16,20 +16,20 @@ async function checkIsCosmosMessageDelivered(
   transactionHash?: string;
   blockNumber?: number;
 }> {
-  const normalizedId = msgId.replace(/^0x/, "").toLowerCase();
+  const normalizedId = msgId.replace(/^0x/, '').toLowerCase();
   try {
     const res = await fetch(rpcUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        jsonrpc: "2.0",
+        jsonrpc: '2.0',
         id: 1,
-        method: "tx_search",
+        method: 'tx_search',
         params: {
           query: `execute._contract_address='${mailboxBech32}'`,
-          order_by: "desc",
+          order_by: 'desc',
           per_page: String(COSMOS_PROCESS_SEARCH_LIMIT),
-          page: "1",
+          page: '1',
         },
       }),
     });
@@ -46,13 +46,11 @@ async function checkIsCosmosMessageDelivered(
     }> = data?.result?.txs || [];
 
     for (const tx of txs) {
-      const processIdEv = tx.tx_result.events.find(
-        (e) => e.type === "wasm-mailbox_process_id",
-      );
+      const processIdEv = tx.tx_result.events.find((e) => e.type === 'wasm-mailbox_process_id');
       if (!processIdEv) continue;
       const attrs: Record<string, string> = {};
-      for (const a of processIdEv.attributes) attrs[a.key] = a.value ?? "";
-      const mid = (attrs["message_id"] || "").replace(/^0x/, "").toLowerCase();
+      for (const a of processIdEv.attributes) attrs[a.key] = a.value ?? '';
+      const mid = (attrs['message_id'] || '').replace(/^0x/, '').toLowerCase();
       if (mid === normalizedId) {
         return {
           isDelivered: true,
@@ -62,7 +60,7 @@ async function checkIsCosmosMessageDelivered(
       }
     }
   } catch (e) {
-    logger.debug("Cosmos delivery check failed", e);
+    logger.debug('Cosmos delivery check failed', e);
   }
   return { isDelivered: false };
 }
@@ -89,17 +87,13 @@ export async function checkIsSealevelMessageDelivered(
 ): Promise<DeliveryCheckResult> {
   try {
     const [{ SealevelCoreAdapter }, { Connection }] = await Promise.all([
-      import("@hyperlane-xyz/sdk"),
-      import("@solana/web3.js"),
+      import('@hyperlane-xyz/sdk'),
+      import('@solana/web3.js'),
     ]);
-    const connection = new Connection(rpcUrl, "confirmed");
-    const pda = SealevelCoreAdapter.deriveMailboxMessageProcessedPda(
-      mailboxAddr,
-      msgId,
-    );
+    const connection = new Connection(rpcUrl, 'confirmed');
+    const pda = SealevelCoreAdapter.deriveMailboxMessageProcessedPda(mailboxAddr, msgId);
     const accountInfo = await connection.getAccountInfo(pda);
-    if (!accountInfo || accountInfo.data.length === 0)
-      return { isDelivered: false };
+    if (!accountInfo || accountInfo.data.length === 0) return { isDelivered: false };
 
     const result: DeliveryCheckResult = { isDelivered: true };
     try {
@@ -117,20 +111,27 @@ export async function checkIsSealevelMessageDelivered(
         if (feePayer) result.from = feePayer.toBase58();
       }
     } catch (e) {
-      logger.debug(
-        "Sealevel delivery tx lookup failed (delivery still confirmed)",
-        e,
-      );
+      logger.debug('Sealevel delivery tx lookup failed (delivery still confirmed)', e);
     }
     return result;
   } catch (e) {
-    logger.debug("Sealevel delivery check failed", e);
+    logger.debug('Sealevel delivery check failed', e);
     return { isDelivered: false };
   }
 }
 
+// In the browser, Solana calls go through the server-side proxy (/api/solana-rpc): public
+// Solana RPCs reject browser-originated requests and the private RPC (SOLANA_RPC_URL) must
+// stay server-side. Outside the browser (tests/scripts) use the registry RPC directly.
+function getSealevelRpcUrl(chainMetadata: { name: string; rpcUrls?: Array<{ http: string }> }) {
+  if (typeof window !== 'undefined' && window.location?.origin) {
+    return `${window.location.origin}/api/solana-rpc?chain=${chainMetadata.name}`;
+  }
+  return chainMetadata.rpcUrls?.[0]?.http;
+}
+
 function getMailboxAddress(
-  multiProvider: Pick<MultiProtocolProvider, "tryGetChainMetadata">,
+  multiProvider: Pick<MultiProtocolProvider, 'tryGetChainMetadata'>,
   chainName: string,
 ): Address | undefined {
   const chainMetadata = multiProvider.tryGetChainMetadata(chainName) as
@@ -152,13 +153,13 @@ export async function extractMessageIdFromTx(
     const provider = multiProvider.getEthersV5Provider(chainName);
     const txReceipt = await provider.getTransactionReceipt(txHash);
     if (!txReceipt) {
-      logger.debug("No transaction receipt found", { txHash, chainName });
+      logger.debug('No transaction receipt found', { txHash, chainName });
       return null;
     }
 
     const mailboxAddress = getMailboxAddress(multiProvider, chainName);
     if (!mailboxAddress) {
-      logger.debug("No mailbox address configured for chain", { chainName });
+      logger.debug('No mailbox address configured for chain', { chainName });
       return null;
     }
 
@@ -167,10 +168,10 @@ export async function extractMessageIdFromTx(
     for (const log of txReceipt.logs) {
       try {
         const parsedLog = mailbox.interface.parseLog(log);
-        if (parsedLog.name === "Dispatch") {
-          const messageBytes = parsedLog.args["message"];
+        if (parsedLog.name === 'Dispatch') {
+          const messageBytes = parsedLog.args['message'];
           const msgId = messageId(messageBytes);
-          logger.debug("Extracted message ID from tx", {
+          logger.debug('Extracted message ID from tx', {
             txHash,
             messageId: msgId,
             chainName,
@@ -182,13 +183,13 @@ export async function extractMessageIdFromTx(
       }
     }
 
-    logger.debug("No Dispatch event found in transaction", {
+    logger.debug('No Dispatch event found in transaction', {
       txHash,
       chainName,
     });
     return null;
   } catch (error) {
-    logger.error("Error extracting message ID from transaction", {
+    logger.error('Error extracting message ID from transaction', {
       error,
       txHash,
       chainName,
@@ -212,38 +213,34 @@ export async function checkIsMessageDelivered(
   blockRange?: number,
 ): Promise<DeliveryCheckResult> {
   const destMetadata = multiProvider.tryGetChainMetadata(destinationChainName);
-  if (destMetadata?.protocol === "cosmos") {
-    const rpcUrl = (destMetadata as { rpcUrls?: Array<{ http: string }> })
-      .rpcUrls?.[0]?.http;
-    const bech32Prefix = (destMetadata as { bech32Prefix?: string })
-      .bech32Prefix;
+  if (destMetadata?.protocol === 'cosmos') {
+    const rpcUrl = (destMetadata as { rpcUrls?: Array<{ http: string }> }).rpcUrls?.[0]?.http;
+    const bech32Prefix = (destMetadata as { bech32Prefix?: string }).bech32Prefix;
     if (rpcUrl && bech32Prefix) {
       try {
-        const bytes = Buffer.from(mailboxAddr.replace(/^0x/, ""), "hex");
+        const bytes = Buffer.from(mailboxAddr.replace(/^0x/, ''), 'hex');
         const mailboxBech32 = bytesToAddressCosmos(bytes, bech32Prefix);
         return checkIsCosmosMessageDelivered(msgId, rpcUrl, mailboxBech32);
       } catch (e) {
-        logger.debug(
-          "Failed to resolve Cosmos mailbox bech32 for delivery check",
-          e,
-        );
+        logger.debug('Failed to resolve Cosmos mailbox bech32 for delivery check', e);
       }
     }
     return { isDelivered: false };
   }
-  if (destMetadata?.protocol === "sealevel") {
-    const rpcUrl = (destMetadata as { rpcUrls?: Array<{ http: string }> })
-      .rpcUrls?.[0]?.http;
+  if (destMetadata?.protocol === 'sealevel') {
+    const rpcUrl = getSealevelRpcUrl(
+      destMetadata as { name: string; rpcUrls?: Array<{ http: string }> },
+    );
     if (!rpcUrl) {
-      logger.debug("No RPC url for Sealevel chain, skipping delivery check", {
+      logger.debug('No RPC url for Sealevel chain, skipping delivery check', {
         destinationChainName,
       });
       return { isDelivered: false };
     }
     return checkIsSealevelMessageDelivered(msgId, mailboxAddr, rpcUrl);
   }
-  if (destMetadata?.protocol !== "ethereum") {
-    logger.debug("Skipping delivery check for non-EVM chain", {
+  if (destMetadata?.protocol !== 'ethereum') {
+    logger.debug('Skipping delivery check for non-EVM chain', {
       destinationChainName,
     });
     return { isDelivered: false };
@@ -255,15 +252,8 @@ export async function checkIsMessageDelivered(
   try {
     logger.debug(`Searching for process logs for msgId ${msgId}`);
     const currentBlock = await provider.getBlockNumber();
-    const fromBlock = Math.max(
-      0,
-      currentBlock - (blockRange || DELIVERY_LOG_CHECK_BLOCK_RANGE),
-    );
-    const logs = await mailbox.queryFilter(
-      mailbox.filters.ProcessId(msgId),
-      fromBlock,
-      "latest",
-    );
+    const fromBlock = Math.max(0, currentBlock - (blockRange || DELIVERY_LOG_CHECK_BLOCK_RANGE));
+    const logs = await mailbox.queryFilter(mailbox.filters.ProcessId(msgId), fromBlock, 'latest');
     if (logs?.length) {
       logger.debug(`Found process log for ${msgId}`);
       const log = logs[0];
@@ -295,14 +285,9 @@ export async function checkIsMessageDelivered(
             blockNumber: log.blockNumber,
           };
         }
-        logger.warn(
-          `processedAt returned ${processedBlock} but no ProcessId log at that block`,
-        );
+        logger.warn(`processedAt returned ${processedBlock} but no ProcessId log at that block`);
       } catch (error) {
-        logger.warn(
-          `Error querying ProcessId log at block ${processedBlock}`,
-          error,
-        );
+        logger.warn(`Error querying ProcessId log at block ${processedBlock}`, error);
       }
       return { isDelivered: true, blockNumber: processedBlock };
     }
