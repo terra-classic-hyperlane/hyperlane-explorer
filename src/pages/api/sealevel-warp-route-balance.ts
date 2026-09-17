@@ -8,6 +8,8 @@ import { TokenStandard } from '@hyperlane-xyz/sdk/token/TokenStandard';
 import type { WarpRouteConfigs } from '@hyperlane-xyz/sdk/warp/read';
 import type { NextApiRequest, NextApiResponse } from 'next';
 
+import { getPrivateSolanaRpcUrl } from '../../utils/solanaRpc.server';
+
 import { config } from '../../consts/config';
 import { SUPPORTED_SEALEVEL_BALANCE_STANDARDS } from '../../features/messages/warpVisualization/tokenStandards';
 import { logger } from '../../utils/logger';
@@ -80,8 +82,13 @@ function getMultiProvider(chainName: string, chain: ChainMetadata) {
   const cached = multiProviders.get(chainName);
   if (cached) return cached;
 
+  // Prefer the private RPC (SOLANA_RPC_URL) over the registry's public endpoints.
+  const privateRpc = getPrivateSolanaRpcUrl(chainName);
+  const chainWithRpc = privateRpc
+    ? { ...chain, rpcUrls: [{ http: privateRpc }, ...(chain.rpcUrls ?? [])] }
+    : chain;
   const multiProvider = new MultiProviderAdapter(
-    { [chainName]: chain as ChainMetadata<{ mailbox?: string }> },
+    { [chainName]: chainWithRpc as ChainMetadata<{ mailbox?: string }> },
     { providerBuilders: { [ProviderType.SolanaWeb3]: defaultSolProviderBuilder } },
   );
   multiProviders.set(chainName, multiProvider);
